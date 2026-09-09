@@ -65,11 +65,16 @@ impl ControllerInterface for Controller {
     ) -> Result<(), Box<dyn std::error::Error>> {
         for item in parameters.workflow_batch.iter() {
             log::info!("[execute_baseline_flow] item {}", item);
+            let Some(kernel_name) = item.split("/").into_iter().last() else {
+                return Err(Box::from(
+                    "[execute_baseline_flow] workflow batch item not properly defined",
+                ));
+            };
+            let name = kernel_name.replace(".py", "");
             // ensure logs directory is created for each kernel
             fs::create_dir_all(format!(
                 "replay-buffer/{}/{}/rl-ncu/baseline",
-                parameters.llm_model,
-                item.replace(".py", "")
+                parameters.llm_model, name
             ))?;
 
             let mut elapsed_cycles = 0_i64;
@@ -77,6 +82,9 @@ impl ControllerInterface for Controller {
             let mut state = String::new();
             let mut match_state = String::new();
             let mut json_plan = String::new();
+
+            log::debug!("[execute_baseline_flow] kernel_name {}", kernel_name);
+            log::debug!("[execute_baseline_flow] name {}", name);
 
             log::trace!(
                 "[execute_baseline_flow] initial elapsed_cycles {}",
@@ -101,17 +109,13 @@ impl ControllerInterface for Controller {
                 "{}/out/{}/{}/rl-ncu/baseline",
                 parameters.working_dir.to_owned(),
                 parameters.llm_model,
-                item.replace(".py", "")
+                name
             );
+            log::debug!("[execute_baseline_flow] reading kernel {}", item);
             let mut code = fs::read_to_string(item)?;
             let payload = format!(
                 r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_name": "{}" , "code": {:?} }}"##,
-                item,
-                parameters.working_dir,
-                parameters.gpu_arch,
-                baseline_dir,
-                item.replace(".py", ""),
-                code,
+                name, parameters.working_dir, parameters.gpu_arch, baseline_dir, kernel_name, code,
             );
             // as we are saving locally to replay buffer , change name 'out' to 'replay-buffer'
             let local_baseline_dir = baseline_dir.replace("/out/", "/replay-buffer/");
@@ -120,10 +124,10 @@ impl ControllerInterface for Controller {
                 // upload cutedsl kernel (item)
                 log::info!("[execute_baseline_flow] baseline uploading cutedsl kernel");
                 let url = format!("{}/v1/upload", parameters.gpu_server_url);
-                let file_name = format!("{}/{}", local_baseline_dir, item);
+                let file_name = format!("{}/{}", local_baseline_dir, kernel_name);
                 code = process_post_call(Some(file_name), url, payload.clone()).await?;
             } else {
-                code = fs::read_to_string(format!("{}/{}", local_baseline_dir, item))?;
+                code = fs::read_to_string(format!("{}/{}", local_baseline_dir, kernel_name))?;
             }
 
             if x & 2u8 == 2 {

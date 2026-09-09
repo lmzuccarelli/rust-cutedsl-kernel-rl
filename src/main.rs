@@ -88,10 +88,7 @@ fn main() {
                                 *MAP_LOOKUP.lock().unwrap() = Some(hm.clone());
                             }
                             None => {
-                                log::error!(
-                                    "[main] the field token_file is mandatory when using the openapi agent"
-                                );
-                                std::process::exit(1);
+                                log::warn!("[main] no token file set for the openapi agent");
                             }
                         }
                     }
