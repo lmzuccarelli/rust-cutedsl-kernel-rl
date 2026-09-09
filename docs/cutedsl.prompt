@@ -1,0 +1,190 @@
+Write a complete, runnable Python script that computes C = A @ B for square
+N×N FP16 matrices on an **sm_86 (Ampere A-series)** GPU using the CUTLASS CuTe DSL (cutlass.cute, version 4.8.0+).
+
+## Constraints
+- Single file, no external dependencies beyond: torch, cutlass, nvidia-cutlass-dsl
+- N = 256 (must be divisible by tile dims)
+- Verify against PyTorch at the end (max |C − ref| < 0.5)
+- Use @cute.kernel and @cute.jit decorators
+- Single warp (32 threads) per CTA — keep it simple and correct
+- Target compute capability: sm_86
+
+## GROUND TRUTH — the only API patterns you may use
+
+I am pasting the actual working example from `examples/python/CuTeDSL/ampere/gemm.py` below. 
+**Every API call in your output must follow the patterns in this file.** 
+Do not invent alternative call signatures, module paths, or class names.
+
+### Imports (exact):
+
+```python
+python import torch import cutlass from cutlass import cute from cutlass.cute import experimental as cute_ext import cutlass.torch as cutlass_torch
+```
+
+### DLPack wrapping (use cutlass_torch):
+
+```python
+python mA = cutlass_torch.to_cute_tensor(A) # not from_dlpack
+```
+
+
+### SMEM allocation:
+
+```python
+python bufferSA = cute_ext.allocate( cute.Float16, cutlass.AddressSpace.smem, cute.make_layout((16, 8), stride=(8, 1)), alignment=16, )
+```
+
+
+### MMA atom (sm_80/86 warp-level):
+
+```python
+python mma_op = cute.nvgpu.warp.MmaF16BF16Op(cutlass.Float16, cutlass.Float32, (16, 8, 8)) tiled_mma = cute.make_tiled_mma(mma_op, (1, 1, 1))
+```
+
+
+### G→S copy atom (cp.async):
+
+```python
+python g2s_copy_atom = cute.make_copy_atom( cute.nvgpu.cpasync.CopyG2SOp(), cute.Float16, num_bits_per_copy=32 ) tiled_copy_g2s_A = cute.make_tiled_copy_tv( g2s_copy_atom, cute.make_layout((16, 2), stride=(2, 1)), cute.make_layout((1, 4)), )
+```
+
+
+### G→S partition + copy (inside kernel):
+
+```python
+python tAgA_k = cute_ext.partition( gA_k, tid_x, layout_tv=tiled_copy_g2s_A.layout_src_tv_tiled, tiler=cute.core._pack_tile(tiled_copy_g2s_A.tiler_mn), ) tAgA_k = cute_ext.predicated_tensor_origin( cute.make_tensor(tAgA_k.iterator.align(4), tAgA_k.layout) ) cute_ext.copy(tAgA_k, tCsA, copy_atom=g2s_copy_atom) cute.arch.cp_async_commit_group() cute.arch.cp_async_wait_group(0) cute.arch.barrier()
+```
+
+
+### S→R copy (LDSM):
+
+```python
+python copy_s2r_a = cute.make_tiled_copy_A( cute.make_copy_atom( cute.nvgpu.warp.LdMatrix8x8x16bOp(transpose=False, num_matrices=1), cute.Float16, ), tiled_mma, ) cute_ext.partition_and_copy(copy_s2r_a.get_slice(tid_x), bufferSA, bufferRA)
+```
+
+
+### Register fragments:
+
+```python
+python thr_mma = tiled_mma.get_slice(tid_x) bufferRA = thr_mma.make_fragment_A(bufferSA) bufferRB = thr_mma.make_fragment_B(bufferSB)
+```
+
+
+### MMA call:
+
+```python
+python cute_ext.dot(tiled_mma, bufferRA, bufferRB, bufferRC)
+```
+
+
+### Epilogue (R→G):
+
+```python
+python copy_r2g_c = cute.make_tiled_copy_C( cute.make_copy_atom( cute.nvgpu.CopyUniversalOp(), mC.element_type, num_bits_per_copy=16 ), tiled_mma, ) cute_ext.partition_and_copy(copy_r2g_c.get_slice(tid_x), bufferRC, gC_tile)
+```
+
+
+### Launch:
+
+```python
+python square_gemm_kernel(mA, mB, mC).launch( grid=(grid_m, grid_n, 1), block=(32, 1, 1), )
+```
+
+
+## THE FULL EXAMPLE FILE (ground truth for all patterns):
+
+```python
+
+# Copyright (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause
+
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+
+# 1. Redistributions of source code must retain the above copyright notice, this
+# list of conditions and the following disclaimer.
+
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+# this list of conditions and the following disclaimer in the documentation
+# and/or other materials provided with the distribution.
+
+# 3. Neither the name of the copyright holder nor the names of its
+# contributors may be used to endorse or promote products derived from
+# this software without specific prior written permission.
+
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+"""
+SM80 (Ampere) SIMT GEMM using tensor core MMA.
+
+This kernel uses a single warp (32 threads) with a 16x8x8 MMA atom.
+"""
+
+def main():
+    # 1. Define dimensions (Must align with your block/tiler sizes)
+    M, N, K = 16, 8, 8
+    device = torch.device("cuda:0")
+    
+    # 2. Initialize inputs on CUDA device as float16
+    torch.manual_seed(42)
+    
+    # Using Row-Major layouts for A and D, Column-Major for B
+    # cutedsl will automatically infer layouts/strides from these PyTorch tensors
+    A_torch = torch.randn((M, K), dtype=torch.float16, device=device)
+    B_torch = torch.randn((K, N), dtype=torch.float16, device=device).t().contiguous().t() 
+    D_torch = torch.zeros((M, N), dtype=torch.float16, device=device)
+
+    # 3. Define Grid and Block configuration 
+    block_cfg = (32, 1, 1) 
+    grid_cfg = (M // 16, N // 8, 1)
+
+    print(f"Launching kernel with Grid: {grid_cfg}, Block: {block_cfg}...")
+    
+    # 4. Launch the cutedsl kernel by passing the PyTorch tensors directly
+    # The DSL wrapper handles Context management and type casting internally.
+    sgemm_kernel[grid_cfg, block_cfg](A_torch, B_torch, D_torch)
+    torch.cuda.synchronize()
+
+    # 5. Compute Reference baseline using PyTorch
+    D_ref = torch.matmul(A_torch, B_torch)
+
+    # 6. Verify absolute and relative tolerances
+    print("\n--- Verification Results ---")
+    is_close = torch.allclose(D_torch, D_ref, rtol=1e-2, atol=1e-2)
+    print(f"Arrays are close: {is_close}")
+    
+    if not is_close:
+        max_diff = torch.max(torch.abs(D_torch - D_ref))
+        print(f"Max absolute difference: {max_diff.item()}")
+    else:
+        print("Success! The kernel output matches the PyTorch reference.")```
+
+## Your task
+
+Write the complete `xxx.py` script. It must:
+
+1. Use **only** the API patterns shown above. If a pattern isn't shown,
+   derive it from the example file. Do NOT use: TMA, WGMMA, tcgen05,
+   `cute.arch.shared_memory()`, `nvgpu.mma`, `from_dlpack`, multi-stage
+   pipelines, or cluster launches.
+
+2. Keep it to a **single warp, 16×8×8 MMA atom, one CTA per tile**.
+   This is a correctness demo, not a performance kernel.
+
+3. Include the verification harness at the bottom (`main()`).
+
+4. Add a comment at the top noting: "Tested on sm_XX, CUTLASS DSL 4.8.0+".
+
+5. Do NOT add any features not in the example. No autotuning, no multi-stage pipeline, no TMA, no 2-CTA clusters.
+
+Output the complete file in a single code block. 
+No explanation needed unless you deviate from the example's patterns — if you do, explain why.

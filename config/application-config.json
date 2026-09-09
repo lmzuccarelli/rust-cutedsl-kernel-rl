@@ -1,0 +1,25 @@
+{
+	"name": "rust-cutedsl-kernel-rl",
+	"log_level": "debug",
+	"gpu_server_url": "http://192.168.1.221:3202",
+  "compile_server_url": "http://192.168.1.221:3201",
+  "llm_server_url": "http://192.168.1.178:3200",
+  "workflow_batch": [
+    "level1/005_Matrix_scalar_multiplication"
+  ],
+  "working_dir": "/home/lzuccarelli/Projects/rust-cutedsl-kernel-rl",
+  "llm_agent": "Claude",
+  "llm_model": "opus-4-6",
+  "controller_mode": "Agent",
+  "token_file": "/home/lzuccarelli/.cerebras/token",
+  "openapi_url": "https://api.cerebras.ai/v1/chat/completions",
+  "max_rollout": 10,
+  "rollout_start": 0,
+  "flow_control": 0,
+  "gpu_arch": 86,
+  "create_stats": true,
+  "use_error_vec": true,
+  "acceptance_threshold": 0.94,
+  "degradation_threshold": -15.0,
+  "exclude_trajectories": []
+}

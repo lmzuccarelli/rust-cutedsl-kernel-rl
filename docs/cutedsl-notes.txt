@@ -1,0 +1,30 @@
+@cute.experimental.kernel / @cute.experimental.jit don't mean "toy version." 
+The word experimental refers to the DSL itself being pre-stable (the Python frontend to CUTLASS is still maturing relative to the C++ API). 
+It has zero effect on codegen quality or performance.
+The MLIR → PTX → SASS pipeline is identical whether your kernel is a 32-thread correctness demo or a 256-thread, 5-stage, 128×128-tile production GEMM.
+
+Lever 	            Demo (current) 	        Optimized
+-----------------   --------------          ---------
+Threads per CTA 	32 (1 warp) 	        128–256 (4–8 warps)
+CTA tile 	        16×8 	                128×128 or 256×128
+MMA atom layout 	(1, 1, 1) 	            (8, 16, 1) or similar
+Pipeline depth 	    1 (wait 0 every iter)   3–5 stage circular buffer
+G→S mechanism 	    cp.async (32-bit) 	    cp.async (128-bit, 8 halfs)
+L2 cache tiling 	None 	                Grouped/rasterized CTA order
+Smem swizzle 	    None 	                XOR swizzle to avoid bank conflicts
+Epilogue 	        Single CopyUniversalOp 	Tiled store with L2 prefetch
+
+
+If CUTLASS ships a stable DSL in a future release, they'll likely:
+# v3.4 (now)
+@cute.experimental.kernel
+@cute.experimental.jit
+
+# v4.0 (hypothetical, when DSL graduates)
+@cute.kernel
+@cute.jit
+
+
+Keep @cute.experimental.* throughout your optimization journey. 
+Performance gains come entirely from what's inside the kernel body (tile sizes, warp count, pipeline, swizzle, rasterization) 
+and the host-side launch config (grid shape, shared memory size).
