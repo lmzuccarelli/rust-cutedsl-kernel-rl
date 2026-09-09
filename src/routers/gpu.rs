@@ -1,3 +1,4 @@
+use crate::config::load::WorkItem;
 use crate::kernel::{
     execute::{Execute, ExecuteInterface},
     file::{FileInterface, FileOperation},
@@ -15,12 +16,12 @@ pub async fn endpoints(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, 
     log::debug!("[endpoints] gpu request {}", request);
     match *req.method() {
         Method::POST => match request {
-            x if x.contains("/v1/cutedsl-kernel") => {
+            x if x.contains("/v1/download") => {
                 let data = req.into_body().collect().await?.to_bytes();
                 let work_item_res = serde_json::from_slice(&data);
                 match work_item_res {
                     Ok(work_item) => {
-                        let content_res = FileOperation::kernel_rw(work_item, true).await;
+                        let content_res = FileOperation::kernel_rw(work_item, false).await;
                         match content_res {
                             Ok(content) => {
                                 *response.body_mut() = Full::from(content);
@@ -40,6 +41,44 @@ pub async fn endpoints(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, 
                         *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                         *response.body_mut() = Full::from(format!(
                             "[endpoints] read/write kernel parsing body error {}\n",
+                            err
+                        ));
+                    }
+                }
+            }
+            x if x.contains("/v1/upload") => {
+                let data = req.into_body().collect().await?.to_bytes();
+                let work_item_res = serde_json::from_slice::<WorkItem>(&data);
+                match work_item_res {
+                    Ok(work_item) => {
+                        let content_res = FileOperation::kernel_rw(work_item.clone(), true).await;
+                        match content_res {
+                            Ok(_) => {
+                                *response.status_mut() = StatusCode::OK;
+                                *response.body_mut() = Full::from("ok");
+                            }
+                            Err(err) => {
+                                log::error!(
+                                    "[endpoints] uploading cuda kernel {} : {:?}",
+                                    err,
+                                    work_item
+                                );
+                                *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                                *response.body_mut() = Full::from(format!(
+                                    "[endpoints] uploading cuda kernel error {}\n",
+                                    err
+                                ));
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        log::error!(
+                            "[endpoints] uploading cuda kernel parsing body error {}",
+                            err
+                        );
+                        *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                        *response.body_mut() = Full::from(format!(
+                            "[endpoints] uploading cuda kernel parsing body error {}\n",
                             err
                         ));
                     }

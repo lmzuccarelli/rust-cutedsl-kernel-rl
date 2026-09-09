@@ -73,7 +73,6 @@ impl ControllerInterface for Controller {
             ))?;
 
             let mut elapsed_cycles = 0_i64;
-            let mut code = String::new();
             let mut ncu_report = String::new();
             let mut state = String::new();
             let mut match_state = String::new();
@@ -83,7 +82,6 @@ impl ControllerInterface for Controller {
                 "[execute_baseline_flow] initial elapsed_cycles {}",
                 elapsed_cycles
             );
-            log::trace!("[execute_baseline_flow] initial code           {}", code);
             log::trace!(
                 "[execute_baseline_flow] initial ncu_report     {}",
                 ncu_report
@@ -105,17 +103,23 @@ impl ControllerInterface for Controller {
                 parameters.llm_model,
                 item.replace(".py", "")
             );
+            let mut code = fs::read_to_string(item)?;
             let payload = format!(
-                r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}" }}"##,
-                item, parameters.working_dir, parameters.gpu_arch, baseline_dir
+                r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_name": "{}" , "code": {:?} }}"##,
+                item,
+                parameters.working_dir,
+                parameters.gpu_arch,
+                baseline_dir,
+                item.replace(".py", ""),
+                code,
             );
             // as we are saving locally to replay buffer , change name 'out' to 'replay-buffer'
             let local_baseline_dir = baseline_dir.replace("/out/", "/replay-buffer/");
 
             if x & 1u8 == 1 {
-                // download cutedsl kernel (init.py)
-                log::info!("[execute_baseline_flow] baseline downloading cutedsl kernel");
-                let url = format!("{}/v1/cutedsl-kernel", parameters.gpu_server_url);
+                // upload cutedsl kernel (item)
+                log::info!("[execute_baseline_flow] baseline uploading cutedsl kernel");
+                let url = format!("{}/v1/upload", parameters.gpu_server_url);
                 let file_name = format!("{}/{}", local_baseline_dir, item);
                 code = process_post_call(Some(file_name), url, payload.clone()).await?;
             } else {
@@ -267,7 +271,7 @@ impl ControllerInterface for Controller {
                         trajectory_dir, plan.technique
                     );
                     let kernel_file_name =
-                        format!("{}/step_0/{}.cu", trajectory_dir, plan.technique);
+                        format!("{}/step_0/{}.py", trajectory_dir, plan.technique);
 
                     // execute in parallel
                     // Due to rate limiting on the cerebras endpoints
