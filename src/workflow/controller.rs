@@ -51,10 +51,6 @@ impl ControllerInterface for Controller {
     }
 
     async fn get_health(parameters: Parameters) -> Result<(), Box<dyn std::error::Error>> {
-        // check compiler endpoint
-        let res_compiler =
-            process_get_call(format!("{}/v1/health", parameters.compile_server_url)).await?;
-        log::info!("{}", res_compiler);
         // check gpu endpoint
         let res_gpu = process_get_call(format!("{}/v1/health", parameters.gpu_server_url)).await?;
         log::info!("{}", res_gpu);
@@ -72,7 +68,8 @@ impl ControllerInterface for Controller {
             // ensure logs directory is created for each kernel
             fs::create_dir_all(format!(
                 "replay-buffer/{}/{}/rl-ncu/baseline",
-                parameters.llm_model, item
+                parameters.llm_model,
+                item.replace(".py", "")
             ))?;
 
             let mut elapsed_cycles = 0_i64;
@@ -106,19 +103,19 @@ impl ControllerInterface for Controller {
                 "{}/out/{}/{}/rl-ncu/baseline",
                 parameters.working_dir.to_owned(),
                 parameters.llm_model,
-                item
+                item.replace(".py", "")
             );
             let payload = format!(
                 r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}" }}"##,
                 item, parameters.working_dir, parameters.gpu_arch, baseline_dir
             );
-            // as we are saving locally to replay buffer , change out to logs
+            // as we are saving locally to replay buffer , change name 'out' to 'replay-buffer'
             let local_baseline_dir = baseline_dir.replace("/out/", "/replay-buffer/");
 
             if x & 1u8 == 1 {
                 // download cutedsl kernel (init.py)
                 log::info!("[execute_baseline_flow] baseline downloading cutedsl kernel");
-                let url = format!("{}/v1/cutedsl-kernel", parameters.compile_server_url);
+                let url = format!("{}/v1/cutedsl-kernel", parameters.gpu_server_url);
                 let file_name = format!("{}/{}", local_baseline_dir, item);
                 code = process_post_call(Some(file_name), url, payload.clone()).await?;
             } else {
@@ -420,13 +417,13 @@ impl ControllerInterface for Controller {
                         log::warn!("[execute_agent_flow] fallback set");
                     }
 
-                    let (cuda_file, kernel_code) = find_kernel_file(
+                    let (kernel_file, kernel_code) = find_kernel_file(
                         local_target_dir.clone(),
                         track_fallback_kernel.clone(),
                         &mut fallback,
                     )?;
 
-                    log::info!("[execute_agent_flow] using kernel file : {}", cuda_file);
+                    log::info!("[execute_agent_flow] using kernel file : {}", kernel_file);
                     log::info!("[execute_agent_flow] using path : {}", local_target_dir);
                     payload = format!(
                         r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_name": "{}" , "code": {:?} }}"##,
@@ -434,13 +431,13 @@ impl ControllerInterface for Controller {
                         parameters.working_dir,
                         parameters.gpu_arch,
                         target_dir,
-                        cuda_file,
+                        kernel_file,
                         kernel_code
                     );
 
                     // 2. upload kernel
-                    log::info!("[execute_agent_flow] uploading kernel : {}", cuda_file);
-                    let url = format!("{}/v1/upload", parameters.compile_server_url);
+                    log::info!("[execute_agent_flow] uploading kernel : {}", kernel_file);
+                    let url = format!("{}/v1/upload", parameters.gpu_server_url);
                     let upload_res = process_post_call(None, url.clone(), payload.clone()).await;
                     match upload_res {
                         Ok(_) => {

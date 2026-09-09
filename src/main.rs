@@ -120,6 +120,7 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+            /*
             match env::var("LD_LIBRARY_PATH") {
                 Ok(val) => {
                     let contents = val.to_string();
@@ -136,6 +137,7 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+            */
             // parameters used in service
             let mut hm: HashMap<String, String> = HashMap::new();
 
@@ -258,12 +260,6 @@ pub async fn execute(
 
 fn get_port(command: String, parameters: Parameters) -> Result<u16, Box<dyn std::error::Error>> {
     let port = match command.as_str() {
-        "compile" => parameters
-            .compile_server_url
-            .split(":")
-            .nth(2)
-            .unwrap_or("3201")
-            .parse::<u16>()?,
         "gpu" => parameters
             .gpu_server_url
             .split(":")

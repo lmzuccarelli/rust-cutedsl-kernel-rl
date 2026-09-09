@@ -42,19 +42,15 @@ The installation of these dependencies is out of scope for this project and it's
 There are basically 3 type of endpoint servers
 
 - llm (for inferencing)
-- compiler
 - gpu
 
-The llm service can be executed on any server (no gpu required). Can use openapi type llm service. It currently uses claude with opus4.8
+The llm service can be executed on any server (no gpu required). It can use openapi type llm service, default is using claude with opus4.8
 
-The compiler does not need a gpu but needs nvcc (plus cudnn, cusparselt and other depenedencies) to be installed.
-
-The gpu service needs a gpu, this is where the compiled binary will be executed and profiled through ncu (nvidia nsights).
+The gpu requires a gpu and relevant cuda and cutedsl dependencies to be installed and available, this is where the 'kernel' will be executed and profiled through ncu (nvidia nsights).
 
 ### Basic Flow 
 
-- The user initiate's a workflow via the various service endpoints (via a config file) using a json payload to indicate the kernel/s to be compiled, executed and profiled.
-- The compiler process is used to compile the cutedsl-kernel/s.
+- The user initiate's a workflow via the various service endpoints (via a config file) using a json payload to indicate the kernel/s to be executed and profiled.
 - The gpu process is used to get an initial baseline by executing the kernel and then profiling it using **ncu** (Nvidia's profiler) for the *Elpased Cycles*.
 - The llm process is prompted with results from the ncu insights (referencing the Speed of Light results), the known database of problems and recommended optimisations with the cuda-kernel code as reference.
 - This process is repeated until the set trajectory value is reached (max_rollout) .

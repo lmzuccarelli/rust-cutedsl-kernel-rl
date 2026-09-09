@@ -8,7 +8,6 @@ pub struct Parameters {
     pub name: String,
     pub log_level: String,
     pub gpu_server_url: String,
-    pub compile_server_url: String,
     pub llm_server_url: String,
     pub workflow_batch: Vec<String>,
     pub working_dir: String,

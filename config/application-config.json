@@ -1,11 +1,10 @@
 {
 	"name": "rust-cutedsl-kernel-rl",
 	"log_level": "debug",
-	"gpu_server_url": "http://192.168.1.221:3202",
-  "compile_server_url": "http://192.168.1.221:3201",
-  "llm_server_url": "http://192.168.1.178:3200",
+	"gpu_server_url": "http://192.168.1.6:3202",
+  "llm_server_url": "http://192.168.1.6:3200",
   "workflow_batch": [
-    "level1/005_Matrix_scalar_multiplication"
+    "kernel-cutedsl/kernels/square-gemm.py"
   ],
   "working_dir": "/home/lzuccarelli/Projects/rust-cutedsl-kernel-rl",
   "llm_agent": "Claude",
