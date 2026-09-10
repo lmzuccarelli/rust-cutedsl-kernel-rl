@@ -1,6 +1,6 @@
 [package]
 name = "rust-cutedsl-kernel-rl"
-version = "0.5.4"
+version = "0.5.6"
 edition = "2024"
 authors = ["Luigi Mario Zuccarelli<>luigizuccarelli@gmail.com"]
 

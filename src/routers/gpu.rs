@@ -27,7 +27,7 @@ pub async fn endpoints(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, 
                                 *response.body_mut() = Full::from(content);
                             }
                             Err(err) => {
-                                log::error!("[endpoints] read/write cuda kernel error {}", err);
+                                log::error!("[endpoints] read/write kernel error {}", err);
                                 *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                                 *response.body_mut() = Full::from(format!(
                                     "[endpoints] read/write kernel error {}\n",
@@ -53,19 +53,19 @@ pub async fn endpoints(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, 
                     Ok(work_item) => {
                         let content_res = FileOperation::kernel_rw(work_item.clone(), true).await;
                         match content_res {
-                            Ok(_) => {
+                            Ok(content) => {
                                 *response.status_mut() = StatusCode::OK;
-                                *response.body_mut() = Full::from("ok");
+                                *response.body_mut() = Full::from(content);
                             }
                             Err(err) => {
                                 log::error!(
-                                    "[endpoints] uploading cuda kernel {} : {:?}",
+                                    "[endpoints] uploading kernel {} : {:?}",
                                     err,
                                     work_item
                                 );
                                 *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                                 *response.body_mut() = Full::from(format!(
-                                    "[endpoints] uploading cuda kernel error {}\n",
+                                    "[endpoints] uploading kernel error {}\n",
                                     err
                                 ));
                             }

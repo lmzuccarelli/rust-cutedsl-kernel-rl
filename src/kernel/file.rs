@@ -20,25 +20,24 @@ impl FileInterface for FileOperation {
         // restore working dir
         env::set_current_dir(work_item.working_dir)?;
 
-        let mut kernel_code = String::new();
+        let kernel_code;
         let dir = work_item.target_dir.clone();
-        log::debug!("[cuda_kernel_rw] directory {}", dir);
-        // create output directory (incase its not created)
-        fs::create_dir_all(format!("{}/build", dir))?;
+        log::debug!("[kernel_rw] directory {}", dir);
 
-        match work_item.kernel_name {
-            Some(name) => {
-                let file = format!("{}/{}", dir, name);
-                log::debug!("[cuda_kernel_rw] file {}", file);
-                log::trace!("[cuda_kernel_rw] kernel_code {}", kernel_code);
+        match work_item.kernel_file {
+            Some(kernel_file) => {
+                let file = format!("{}/{}", dir, kernel_file);
+                log::debug!("[kernel_rw] file {}", file);
                 if write && work_item.code.is_some() {
                     kernel_code = work_item.code.unwrap_or("".to_string());
+                    log::trace!("[kernel_rw] code {}", kernel_code);
                     fs::write(file, kernel_code.clone())?;
                 } else {
                     kernel_code = fs::read_to_string(&file)?;
                 }
             }
             None => {
+                // TODO: need to ensure correct name and path
                 let file = format!("kernel-cutedsl/{}", work_item.name);
                 kernel_code = fs::read_to_string(&file)?;
             }

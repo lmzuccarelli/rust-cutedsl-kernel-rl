@@ -30,7 +30,7 @@ impl ProfileInterface for Profile {
         // let ld_lib = env::var("LD_LIBRARY_PATH")?;
 
         // get the kernel name
-        let kernel_file = match work_item.kernel_name {
+        let kernel_file = match work_item.kernel_file {
             Some(name) => format!("{}/{}", work_item.target_dir, name),
             None => format!("kernel-cutedsl/{}", work_item.name),
         };

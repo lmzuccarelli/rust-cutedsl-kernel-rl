@@ -1,6 +1,6 @@
 {
 	"name": "rust-cutedsl-kernel-rl",
-	"log_level": "trace",
+	"log_level": "debug",
 	"gpu_server_url": "http://192.168.1.6:3202",
   "llm_server_url": "http://192.168.1.6:3200",
   "workflow_batch": [
@@ -14,7 +14,7 @@
   "max_rollout": 10,
   "rollout_start": 0,
   "flow_control": 1,
-  "gpu_arch": 86,
+  "gpu_arch": 121,
   "create_stats": true,
   "use_error_vec": true,
   "acceptance_threshold": 0.94,

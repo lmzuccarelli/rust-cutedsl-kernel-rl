@@ -17,6 +17,7 @@ use custom_logger as log;
 use serde_derive::{Deserialize, Serialize};
 use short_id::short_id_with_bytes;
 use std::fs;
+use std::path::Path;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -65,12 +66,12 @@ impl ControllerInterface for Controller {
     ) -> Result<(), Box<dyn std::error::Error>> {
         for item in parameters.workflow_batch.iter() {
             log::info!("[execute_baseline_flow] item {}", item);
-            let Some(kernel_name) = item.split("/").into_iter().last() else {
+            let Some(kernel_file) = item.split("/").into_iter().last() else {
                 return Err(Box::from(
                     "[execute_baseline_flow] workflow batch item not properly defined",
                 ));
             };
-            let name = kernel_name.replace(".py", "");
+            let name = kernel_file.replace(".py", "");
             // ensure logs directory is created for each kernel
             fs::create_dir_all(format!(
                 "replay-buffer/{}/{}/rl-ncu/baseline",
@@ -83,7 +84,7 @@ impl ControllerInterface for Controller {
             let mut match_state = String::new();
             let mut json_plan = String::new();
 
-            log::debug!("[execute_baseline_flow] kernel_name {}", kernel_name);
+            log::debug!("[execute_baseline_flow] kernel_name {}", kernel_file);
             log::debug!("[execute_baseline_flow] name {}", name);
 
             log::trace!(
@@ -114,8 +115,8 @@ impl ControllerInterface for Controller {
             log::debug!("[execute_baseline_flow] reading kernel {}", item);
             let mut code = fs::read_to_string(item)?;
             let payload = format!(
-                r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_name": "{}" , "code": {:?} }}"##,
-                name, parameters.working_dir, parameters.gpu_arch, baseline_dir, kernel_name, code,
+                r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" , "code": {:?} }}"##,
+                name, parameters.working_dir, parameters.gpu_arch, baseline_dir, kernel_file, code,
             );
             // as we are saving locally to replay buffer , change name 'out' to 'replay-buffer'
             let local_baseline_dir = baseline_dir.replace("/out/", "/replay-buffer/");
@@ -124,10 +125,10 @@ impl ControllerInterface for Controller {
                 // upload cutedsl kernel (item)
                 log::info!("[execute_baseline_flow] baseline uploading cutedsl kernel");
                 let url = format!("{}/v1/upload", parameters.gpu_server_url);
-                let file_name = format!("{}/{}", local_baseline_dir, kernel_name);
+                let file_name = format!("{}/{}", local_baseline_dir, kernel_file);
                 code = process_post_call(Some(file_name), url, payload.clone()).await?;
             } else {
-                code = fs::read_to_string(format!("{}/{}", local_baseline_dir, kernel_name))?;
+                code = fs::read_to_string(format!("{}/{}", local_baseline_dir, kernel_file))?;
             }
 
             if x & 2u8 == 2 {
@@ -146,10 +147,13 @@ impl ControllerInterface for Controller {
                     "[execute_baseline_flow] baseline calling profile cutedsl kernel endpoint"
                 );
                 let url = format!("{}/v1/profile", parameters.gpu_server_url);
-                let file_name = format!("{}/profile.txt", local_baseline_dir);
-                ncu_report = process_post_call(Some(file_name), url, payload).await?;
+                let profile_file = format!("{}/profile.txt", local_baseline_dir);
+                ncu_report = process_post_call(Some(profile_file), url, payload).await?;
             } else {
-                ncu_report = fs::read_to_string(format!("{}/profile.txt", local_baseline_dir))?;
+                let profile_file = format!("{}/profile.txt", local_baseline_dir);
+                if Path::new(&profile_file).exists() {
+                    ncu_report = fs::read_to_string(format!("{}/profile.txt", local_baseline_dir))?;
+                }
             }
 
             elapsed_cycles = Profile::get_elapsed_cycles(ncu_report.clone())?;
@@ -159,6 +163,7 @@ impl ControllerInterface for Controller {
             );
 
             if x & 8u8 == 8 {
+                let file_name = format!("{}/llm_state_response.txt", local_baseline_dir);
                 log::info!(
                     "[execute_baseline_flow] baseline calling llm endpoint (current state profile)"
                 );
@@ -170,11 +175,15 @@ impl ControllerInterface for Controller {
                     parameters.llm_server_url,
                     parameters.llm_agent.to_string().to_lowercase()
                 );
-                let file_name = format!("{}/llm_state_response.txt", local_baseline_dir);
                 state = process_post_call(Some(file_name), url, prompt).await?;
             } else {
-                state =
-                    fs::read_to_string(format!("{}/llm_state_response.txt", local_baseline_dir))?;
+                let file_name = format!("{}/llm_state_response.txt", local_baseline_dir);
+                if Path::new(&file_name).exists() {
+                    state = fs::read_to_string(format!(
+                        "{}/llm_state_response.txt",
+                        local_baseline_dir
+                    ))?;
+                }
             }
 
             if x & 16u8 == 16 {
@@ -190,10 +199,13 @@ impl ControllerInterface for Controller {
                 let file_name = format!("{}/llm_match_state_response.txt", local_baseline_dir);
                 match_state = process_post_call(Some(file_name), url, prompt).await?;
             } else {
-                match_state = fs::read_to_string(format!(
-                    "{}/llm_match_state_response.txt",
-                    local_baseline_dir
-                ))?;
+                let file_name = format!("{}/llm_match_state_response.txt", local_baseline_dir);
+                if Path::new(&file_name).exists() {
+                    match_state = fs::read_to_string(format!(
+                        "{}/llm_match_state_response.txt",
+                        local_baseline_dir
+                    ))?;
+                }
             }
 
             if x & 32u8 == 32 {
@@ -217,8 +229,13 @@ impl ControllerInterface for Controller {
                 let file_name = format!("{}/optimization-plan.json", local_baseline_dir);
                 json_plan = process_post_call(Some(file_name), url, prompt_op).await?;
             } else {
-                json_plan =
-                    fs::read_to_string(format!("{}/optimization-plan.json", local_baseline_dir))?;
+                let file_name = format!("{}/optimization-plan.json", local_baseline_dir);
+                if Path::new(&file_name).exists() {
+                    json_plan = fs::read_to_string(format!(
+                        "{}/optimization-plan.json",
+                        local_baseline_dir
+                    ))?;
+                }
             }
 
             if x & 64u8 == 64 {
