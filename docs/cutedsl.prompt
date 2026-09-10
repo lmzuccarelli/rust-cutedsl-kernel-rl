@@ -95,79 +95,112 @@ python square_gemm_kernel(mA, mB, mC).launch( grid=(grid_m, grid_n, 1), block=(3
 
 ```python
 
-# Copyright (c) 2025 - 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
-
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
 """
-SM80 (Ampere) SIMT GEMM using tensor core MMA.
+square_gemm.py – C = A @ B  (square, FP32) with CuTeDSL (cutlass.cute 4.8.0+).
 
-This kernel uses a single warp (32 threads) with a 16x8x8 MMA atom.
+Tiled shared-memory GEMM: each CTA computes a TS×TS output tile, each thread
+one output element, accumulating over K in TS-wide tiles staged through SMEM.
+Uses only plain FP32 FMA (no tensor cores / LDSM), so it is correct and
+portable across architectures.
+
+Pattern from:
+  examples/python/CuTeDSL/experimental/primitives/tutorial/03_gemm_tiled_smem.py
 """
+
+import os
+
+# The GB10 (Grace Blackwell) GPU reports compute capability sm_121, which this
+# CUTLASS DSL build (4.8.0) does not yet enumerate (it tops out at sm_120).
+# sm_121 is binary-compatible with the sm_120 family, so target sm_120a.
+# Must be set before importing cutlass, as the arch is resolved at import time.
+os.environ.setdefault("CUTE_EXPERIMENTAL_DSL_ARCH", "sm_120a")
+
+import torch
+import cutlass
+import cutlass.cute as cute
+from cutlass.experimental import primitives as prims
+
+
+@cute.kernel
+def square_gemm_kernel(
+    a: cute.Tensor,
+    b: cute.Tensor,
+    c: cute.Tensor,
+    TS: cutlass.Constexpr[int],
+):
+    """C = A @ B. One CTA per TS×TS output tile, one thread per element."""
+    tx, ty, _ = cute.arch.thread_idx()   # tx: col within tile, ty: row within tile
+    bx, by, _ = cute.arch.block_idx()    # bx: tile row,        by: tile col
+
+    # Shared-memory staging tiles for the current K-slice.
+    a_smem = cutlass.Array(cutlass.Float32, (TS, TS), space=cutlass.AddressSpace.smem)
+    b_smem = cutlass.Array(cutlass.Float32, (TS, TS), space=cutlass.AddressSpace.smem)
+
+    M = a.shape[0]
+    K = a.shape[1]
+    N = b.shape[1]
+
+    row = bx * TS + ty
+    col = by * TS + tx
+
+    acc = cutlass.Float32(0.0)
+    for bk in cutlass.range(0, K, TS):
+        # Cooperatively load one TS×TS tile of A and of B into SMEM.
+        a_smem[ty, tx] = a[row, bk + tx]
+        b_smem[ty, tx] = b[bk + ty, col]
+
+        prims.barrier_cta_sync(0)
+
+        # Multiply the two staged tiles.
+        for j in cutlass.range(TS):
+            acc += a_smem[ty, j] * b_smem[j, tx]
+
+        prims.barrier_cta_sync(0)
+
+    c[row, col] = acc
+
+
+@cute.jit
+def square_gemm(
+    mA: cute.Tensor,
+    mB: cute.Tensor,
+    mC: cute.Tensor,
+    TS: cutlass.Constexpr[int],
+):
+    M = mA.shape[0]
+    N = mB.shape[1]
+    block = (TS, TS, 1)
+    grid = (M // TS, N // TS, 1)
+    square_gemm_kernel(mA, mB, mC, TS).launch(grid=grid, block=block)
+
 
 def main():
-    # 1. Define dimensions (Must align with your block/tiler sizes)
-    M, N, K = 16, 8, 8
-    device = torch.device("cuda:0")
-    
-    # 2. Initialize inputs on CUDA device as float16
-    torch.manual_seed(42)
-    
-    # Using Row-Major layouts for A and D, Column-Major for B
-    # cutedsl will automatically infer layouts/strides from these PyTorch tensors
-    A_torch = torch.randn((M, K), dtype=torch.float16, device=device)
-    B_torch = torch.randn((K, N), dtype=torch.float16, device=device).t().contiguous().t() 
-    D_torch = torch.zeros((M, N), dtype=torch.float16, device=device)
+    N = 1024          # square; must be divisible by TS
+    TS = 32           # tile size == block edge (TS*TS = 1024 threads/CTA)
+    assert N % TS == 0, "N must be divisible by TS"
 
-    # 3. Define Grid and Block configuration 
-    block_cfg = (32, 1, 1) 
-    grid_cfg = (M // 16, N // 8, 1)
+    torch.manual_seed(0)
+    A = torch.randn(N, N, device="cuda", dtype=torch.float32)
+    B = torch.randn(N, N, device="cuda", dtype=torch.float32)
+    C = torch.zeros(N, N, device="cuda", dtype=torch.float32)
 
-    print(f"Launching kernel with Grid: {grid_cfg}, Block: {block_cfg}...")
-    
-    # 4. Launch the cutedsl kernel by passing the PyTorch tensors directly
-    # The DSL wrapper handles Context management and type casting internally.
-    sgemm_kernel[grid_cfg, block_cfg](A_torch, B_torch, D_torch)
+    square_gemm(
+        cute.runtime.from_dlpack(A),
+        cute.runtime.from_dlpack(B),
+        cute.runtime.from_dlpack(C),
+        TS=TS,
+    )
     torch.cuda.synchronize()
 
-    # 5. Compute Reference baseline using PyTorch
-    D_ref = torch.matmul(A_torch, B_torch)
+    ref = A @ B
+    max_diff = (C - ref).abs().max().item()
+    print(f"N={N}  TS={TS}  max|C - ref| = {max_diff:.4e}")
+    torch.testing.assert_close(C, ref, atol=1e-2, rtol=1e-2)
+    print("✅ square_gemm OK")
 
-    # 6. Verify absolute and relative tolerances
-    print("\n--- Verification Results ---")
-    is_close = torch.allclose(D_torch, D_ref, rtol=1e-2, atol=1e-2)
-    print(f"Arrays are close: {is_close}")
-    
-    if not is_close:
-        max_diff = torch.max(torch.abs(D_torch - D_ref))
-        print(f"Max absolute difference: {max_diff.item()}")
-    else:
-        print("Success! The kernel output matches the PyTorch reference.")```
 
+if __name__ == "__main__":
+    main()
 ## Your task
 
 Write the complete `xxx.py` script. It must:

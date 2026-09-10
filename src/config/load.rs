@@ -36,6 +36,7 @@ pub struct WorkItem {
     pub working_dir: String,
     pub kernel_file: Option<String>,
     pub code: Option<String>,
+    // pub cutedsl_env_path: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

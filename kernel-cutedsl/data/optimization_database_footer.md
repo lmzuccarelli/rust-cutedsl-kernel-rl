@@ -35,7 +35,8 @@ The LLM agents use this database as a **living reference** that evolves based on
 
 #### Expert Technique: tensor_core_utilization
 
-The outline was used for cpp cuda kernels. IMPORTANT: PLEASE ADAPT USING CUTLASS CuTe DSL (cutlass.cute, version 4.8.0+)
+The outline was used for cpp cuda kernels. 
+IMPORTANT: PLEASE ADAPT USING CUTLASS CuTe DSL (cutlass.cute, version 4.8.0+) IF APPLICABLE
 
 **Usage Examples**:
 
