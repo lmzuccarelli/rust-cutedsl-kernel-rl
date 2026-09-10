@@ -26,20 +26,21 @@ impl ProfileInterface for Profile {
         // restore working dir
         env::set_current_dir(&work_item.working_dir)?;
 
-        // ensure we read and set LD_LIBARAY_PATH envar
-        // let ld_lib = env::var("LD_LIBRARY_PATH")?;
-
         // get the kernel name
         let kernel_file = match work_item.kernel_file {
             Some(name) => format!("{}/{}", work_item.target_dir, name),
-            None => format!("kernel-cutedsl/{}", work_item.name),
+            None => {
+                return Err(Box::from(
+                    "[run] (profileinterface) kernel_file field missing",
+                ));
+            }
         };
         let kernel = fs::read_to_string(&kernel_file)?;
         // handle multiple kernel names
         let kernel_names = extract_kernel_name(kernel)?;
         log::debug!("[run] profile kernel_names {:#?}", kernel_names);
         // for profiling we set the current working directory
-        env::set_current_dir(format!("{}/build", work_item.target_dir))?;
+        env::set_current_dir(format!("{}", work_item.target_dir))?;
 
         for name in kernel_names.iter() {
             log::info!("[run] profiling kernel {}", name);

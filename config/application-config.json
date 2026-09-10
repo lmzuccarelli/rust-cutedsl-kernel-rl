@@ -13,7 +13,7 @@
   "openapi_url": "http://192.168.1.6:8001/v1/chat/completions",
   "max_rollout": 10,
   "rollout_start": 0,
-  "flow_control": 1,
+  "flow_control": 4,
   "gpu_arch": 121,
   "create_stats": true,
   "use_error_vec": true,

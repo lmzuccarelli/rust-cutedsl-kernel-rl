@@ -147,6 +147,11 @@ impl ControllerInterface for Controller {
             }
 
             if x & 4u8 == 4 {
+                let payload = format!(
+                    r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" }}"##,
+                    name, parameters.working_dir, parameters.gpu_arch, baseline_dir, kernel_file,
+                );
+
                 // call the nvidia ncu profile endpoint
                 log::info!(
                     "[execute_baseline_flow] baseline calling profile cutedsl kernel endpoint"
