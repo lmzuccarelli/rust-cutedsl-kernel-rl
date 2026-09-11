@@ -29,13 +29,17 @@ impl ProfileInterface for Profile {
 
         // get the kernel name
         let kernel_file = match work_item.kernel_file {
-            Some(name) => format!("{}/{}", work_item.target_dir, name),
+            Some(name) => name,
             None => {
                 return Err(Box::from(
                     "[run] (profileinterface) kernel_file field missing",
                 ));
             }
         };
+
+        // for profiling we set the current target directory
+        env::set_current_dir(work_item.target_dir)?;
+
         let kernel = fs::read_to_string(&kernel_file)?;
         // handle multiple kernel names
         let kernel_names = extract_kernel_name(kernel)?;
@@ -48,14 +52,12 @@ impl ProfileInterface for Profile {
                 "[run] (profileinterface) could not extract annotated kernel funcion",
             ));
         }
-        // for profiling we set the current working directory
-        env::set_current_dir(work_item.target_dir)?;
         let cutedsl_env_path = get_item("cutedsl_env_path")?;
 
         for name in kernel_names.iter() {
             log::info!("[run] profiling kernel {}", name);
-            let output_res = Command::new("sudo")
-                .arg("/usr/local/cuda/bin/ncu")
+            let mut cmd = Command::new("sudo");
+            cmd.arg("/usr/local/cuda/bin/ncu")
                 .arg("--target-processes")
                 .arg("all")
                 .arg("--kernel-name")
@@ -64,47 +66,59 @@ impl ProfileInterface for Profile {
                 .arg("full")
                 .arg("-o")
                 .arg(format!("profile-{}", name))
-                .arg(format!("{}/bin/python {}", cutedsl_env_path, kernel_file))
-                .output();
+                .arg("-f")
+                .arg(format!("{}/bin/python3", cutedsl_env_path))
+                .arg(kernel_file.clone());
+
+            log::trace!("[run] (profileinterface) full cli {:?}", cmd);
+
+            let output_res = cmd.output();
 
             match output_res {
                 Ok(output) => {
                     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
                     let elapsed = start.elapsed();
-                    log::info!("[run] profile : completed task in {:?}", elapsed);
+                    log::info!("[run] (profileinterface) completed task in {:?}", elapsed);
                     // preserve output
                     println!("{}", stdout);
                     stdout
                 }
                 Err(e) => {
-                    log::error!("[run] profile {}", e);
+                    log::error!("[run] (profileinterface) {}", e);
                     return Err(Box::from(e));
                 }
             };
 
-            let output = Command::new("sudo")
+            let convert_output_res = Command::new("sudo")
                 .arg("/usr/local/cuda/bin/ncu")
                 .arg("--import")
                 .arg(format!("profile-{}.ncu-rep", name))
                 .arg("--page")
                 .arg("details")
-                .output()?;
+                .output();
 
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let elapsed = start.elapsed();
-            log::info!("[run] profile convert : completed task in {:?}", elapsed);
-
-            if !output.status.success() {
-                return Err(Box::from(stderr.to_string()));
-            }
-
-            // write the final report to disk
-            fs::write(format!("{}.profile", name), stdout.clone())?;
-            profile_buffer.push('\n');
-            profile_buffer.push_str(&stdout);
+            match convert_output_res {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let elapsed = start.elapsed();
+                    log::info!(
+                        "[run] (profileinterface) convert completed task in {:?}",
+                        elapsed
+                    );
+                    // preserve output
+                    println!("{}", stdout);
+                    // write the final report to disk
+                    fs::write(format!("{}.profile", name), stdout.clone())?;
+                    profile_buffer.push('\n');
+                    profile_buffer.push_str(&stdout);
+                }
+                Err(e) => {
+                    log::error!("[run] (profileinterface) convert {}", e);
+                    return Err(Box::from(e));
+                }
+            };
         }
-
+        // return profile buffer with all detected kernel profiles
         Ok(profile_buffer)
     }
 

@@ -6,7 +6,7 @@ pub fn get_profile_prompt(code: String, ncu_report: String) -> String {
 You are a GPU performance analysis expert. Analyze this NVIDIA NSight Compute (NCU) profiling report and provide a qualitative summary of the kernel's performance state.
 
 CODE IMPLEMENTATION:
-```cutedsl
+```python
 {code}
 ```
 
@@ -246,7 +246,7 @@ STATE ANALYSIS RESPONSE:
 {state_analysis_response}
 
 CODE IMPLEMENTATION:
-```cutedsl
+```python
 {code}
 ```
 
@@ -556,7 +556,7 @@ pub fn get_task_generate_code_prompt(
     format!(
         r#"
 OPTIMIZATION TASK:
-You are an expert CUDA optimization agent, and you are provided an optimization plan. Your task is to apply the optimization plan to the current kernel. You will be provided with the annotated source code, the raw NCU profiling log, and the optimization plan.
+You are an expert CUDA/CuteDSL optimization agent, and you are provided an optimization plan. Your task is to apply the optimization plan to the current kernel. You will be provided with the annotated source code, the raw NCU profiling log, and the optimization plan.
 
 OPTIMIZATION STRATEGY: {technique}
 PREDICTED IMPROVEMENT: N/A
@@ -569,24 +569,24 @@ CURRENT KERNEL ANALYSIS:
 {profile}
 
 ANNOTATED SOURCE CODE (with per-line analysis):
-```cutedsl
+```python
 {code}
 ```
 
 {combined}
 CRITICAL REQUIREMENTS:
 1. Reference the optimization database for detailed implementation guidance.
-2. Generate COMPLETE, COMPILABLE/EXECUTABLE CuteDSL kernel code.
+2. Generate COMPLETE, EXECUTABLE CuteDSL kernel code.
 3. Import ALL necessary components:
    - import numpy as np
    - import cutlass
    - import cutlass.cute as cute
    - import torch
-   - Complete launch_gpu_implementation function
+   - Ensure there is a validation harness (main()) included
    - Generate full completed CuteDSL code (no code snippets)
-4. Format ALL code in a single ```cutedsl code block.
+4. Format ALL code in a single ```python code block.
 5. Focus specifically on the technique described in the database.
-6. COMPILATION SAFETY: Ensure all constants are properly defined.
+6. EXECUTIONAL SAFETY: Ensure all constants are properly defined.
 7. Summarize the optimization technique applied and the reason for the improvement before the code. Be concise in your summarization.
 8. DO NOT include any cutedsl code in the summarization.
 9. DO NOT attempt to write the code to disk, as you don't have permission to do so, simply output the generated code to console only.

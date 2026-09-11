@@ -29,142 +29,134 @@ This database integrates with the comprehensive GPU optimization decision tree t
 - **Multi-objective optimization**: Balancing performance, accuracy, and maintainability
 - **Hardware-specific guidance**: Tailored recommendations for different GPU architectures
 
-The LLM agents use this database as a **living reference** that evolves based on actual optimization results, enabling continuous improvement in optimization strategy selection and performance prediction. 
+The LLM agents use this database as a **living reference** that evolves based on actual optimization results, enabling continuous improvement in optimization strategy selection and performance prediction.
 
 ### Learned Optimization Strategies
 
 #### Expert Technique: tensor_core_utilization
 
-The outline was used for cpp cuda kernels. 
-IMPORTANT: PLEASE ADAPT USING CUTLASS CuTe DSL (cutlass.cute, version 4.8.0+) IF APPLICABLE
+The outline below was originally written for C++/CUDA kernels using the WMMA API.
+It has been adapted to **CUTLASS CuTe DSL (`cutlass.cute`, version 4.8.0+)**, which is
+the idiom this project uses.
+
+**Key adjustment (CUDA WMMA → CuTe DSL):** In CuTe DSL you never call `wmma::*`
+directly. Tensor-core MMA is expressed declaratively:
+
+1. Pick an **MMA atom** for the target instruction shape / dtypes (e.g. a
+   16×16×16 HMMA with fp16 inputs and fp32 accumulation).
+2. Build a **TiledMMA** that spreads that atom across the threads of a warp
+   (or warp-group) via `cute.make_tiled_mma`.
+3. Partition the SMEM/GMEM operand tiles with the TiledMMA to obtain per-thread
+   **register fragments** (`thr_mma.partition_fragment_A/_B/_C`).
+4. Run the K-reduction with `cute.gemm(tiled_mma, acc, rA, rB, acc)`, which lowers
+   straight to the tensor-core MMA instruction.
+
+Compared to the CUDA version this removes all manual `lda`/`ldb` pointer math, the
+`__syncwarp()` producer/consumer dance, and the hand-written zero-padding pack loop:
+CuTe layouts carry the strides, and tails are handled by **predicated copies**
+(`cute.copy(..., pred=...)`) instead of packing into scratch SMEM.
 
 **Usage Examples**:
 
- IMPORTANT: DO NOT USE ANY WMMA FUNCTIONS OUTSIDE OF THIS HELPER
+```python
+# tensor_core_utilization — CuTe DSL (cutlass.cute 4.8.0+)
+#
+# Computes a BM×BN output tile of C = A @ B, accumulating across K in BK-wide
+# steps on the Tensor Cores. A is (M,K) row-major fp16, B is (K,N) row-major fp16,
+# C is (M,N) fp32. Tails (partial M/N/K) are handled with predicated copies rather
+# than the CUDA-style zero-pad packing.
+import os
+# GB10 (sm_121) is binary-compatible with the sm_120 family; the 4.8.0 DSL tops
+# out at sm_120. Must be set before importing cutlass (arch resolved at import).
+os.environ.setdefault("CUTE_EXPERIMENTAL_DSL_ARCH", "sm_120a")
 
- Purpose:
- - Computes one 16x16 tile of C (at output block coords (c_row, c_col)).
- - Accumulates across K in 16-wide steps using Tensor Cores.
- - Handles all tail cases: partial M, partial N, and K-tail by packing with zero padding when needed.
- - Stores the 16x16 accumulator tile to accum_out in row-major order (float).
+import torch
+import cutlass
+import cutlass.cute as cute
+from cutlass.experimental import primitives as prims
 
- Inputs (row-major operands):
- - A_tile_base: pointer to A at row c_row and k=0, i.e. &A[c_row * K + 0]
- - lda: leading dimension for A; must be K
- - B_tile_col_ptr: pointer to the start of column c_col in B, i.e. &B[0 * N + c_col]
- - ldb: leading dimension for B; must be N
- - m_eff: number of valid rows in this tile (<= 16)
- - n_eff: number of valid cols in this tile (<= 16)
- - total_k: K (the reduction dimension). Can be any positive integer.
 
- Output:
- - accum_out: pointer to a 16x16 float tile buffer (row-major). Must be unique per warp
-   and 16-byte aligned when placed in shared memory.
- - a_pack, b_pack: per-warp 16x16 half buffers in shared memory used only when K-tail exists;
-   must be unique per warp and 16-byte aligned.
+@cute.kernel
+def tc_gemm_tile_kernel(
+    gA: cute.Tensor,          # (M, K) row-major, fp16
+    gB: cute.Tensor,          # (K, N) row-major, fp16
+    gC: cute.Tensor,          # (M, N) row-major, fp32
+    tiled_mma: cute.TiledMma, # tensor-core MMA, built on the host
+    BM: cutlass.Constexpr[int],
+    BN: cutlass.Constexpr[int],
+    BK: cutlass.Constexpr[int],
+):
+    bx, by, _ = cute.arch.block_idx()
 
- Usage in the outer kernel for tile (c_row, c_col):
-   const __half* A_tile_base = A + c_row * K;         // row offset into A
-   const __half* B_tile_col_ptr = B + c_col;          // column offset into B (row-major)
-   wmma_tile_16x16_helper(A_tile_base, K,
-                          B_tile_col_ptr, N,
-                          M_eff, N_eff, K,
-                          warp_tile,
-                          warp_a_pack,
-                          warp_b_pack);
+    # This CTA's output tile of C and the matching K-slabs of A and B.
+    # local_tile carries the strides, so there is no lda/ldb to pass around.
+    cta_C = cute.local_tile(gC, (BM, BN), (bx, by))       # (BM, BN)
+    cta_A = cute.local_tile(gA, (BM, BK), (bx, None))     # (BM, BK, k_tiles)
+    cta_B = cute.local_tile(gB, (BK, BN), (None, by))     # (BK, BN, k_tiles)
 
- Important notes and pitfalls considered:
- - Operand layouts:
-   Both A and B are row_major. The B submatrix used for C(c_row:c_row+16, c_col:c_col+16) at
-   K-slice kk is B(kk:kk+16, c_col:c_col+16). With row_major loads, the base pointer and stride
-   must be B + c_col + kk * ldb, with ldb = N.
+    # SMEM staging tiles for the current K-slice (per CTA, 16-byte aligned).
+    sA = cutlass.Array(cutlass.Float16, (BM, BK), space=cutlass.AddressSpace.smem)
+    sB = cutlass.Array(cutlass.Float16, (BK, BN), space=cutlass.AddressSpace.smem)
 
- - Strides and base pointers:
-   Passing wrong lda/ldb or mismatched base pointers yields incorrect results.
-   A loads use base A + kk with lda = K (because A is row-major MxK).
-   B loads use base B + c_col + kk * N with ldb = N (because B is row-major KxN).
-   Do NOT use B + b_row + b_col * K unless B is truly column-major.
+    # Per-thread MMA view: register fragments for A, B, and the C accumulator.
+    thr_mma = tiled_mma.get_slice(cute.arch.thread_idx()[0])
+    rA = thr_mma.partition_fragment_A(sA)
+    rB = thr_mma.partition_fragment_B(sB)
+    rC = thr_mma.partition_fragment_C(cta_C)
+    rC.fill(0.0)   # replaces wmma::fill_fragment(c_frag, 0.0f)
 
- - Tile completeness and tails:
-   - Fast path: when m_eff==16, n_eff==16, and k_frag==16, load directly from global.
-   - Otherwise (edge tiles or K-tail): cooperatively pack A and B blocks into a_pack/b_pack
-     with zero padding outside valid extents, then run MMA on the packed tiles.
+    k_tiles = cute.size(cta_A, mode=[2])
+    for k in cutlass.range(k_tiles):
+        # Cooperative, coalesced GMEM -> SMEM copy of the current K-slice.
+        # For the K-tail (or partial M/N edge tiles) pass a predicate so
+        # out-of-range elements read as zero — the CuTe replacement for the
+        # CUDA hand-packed a_pack/b_pack zero-padding.
+        cute.copy(cta_A[None, None, k], sA)
+        cute.copy(cta_B[None, None, k], sB)
+        prims.barrier_cta_sync(0)
 
- - Shared memory staging and alignment:
-   Store the accumulator fragment to a per-warp float[16*16] buffer. Declare dynamic
-   shared memory as aligned bytes and cast to float* to ensure proper alignment for
-   wmma::store_matrix_sync. Use __syncwarp() around producer/consumer steps. a_pack/b_pack
-   must be per-warp and non-overlapping.
+        # SMEM -> registers, then issue the tensor-core MMA over the tile.
+        cute.copy(sA, rA)
+        cute.copy(sB, rB)
+        cute.gemm(tiled_mma, rC, rA, rB, rC)   # replaces wmma::mma_sync
+        prims.barrier_cta_sync(0)
 
- - Warp/block tile mapping:
-   Each warp must cover a unique set of tiles. Compute base tile indices from blockIdx
-   plus per-warp offsets, then iterate local i/j within the warp. Avoid double-adding
-   loop indices into the base (which causes overlaps/gaps).
+    # Store the accumulator back to C (replaces wmma::store_matrix_sync).
+    cute.copy(rC, thr_mma.partition_C(cta_C))
 
- - Architecture:
-   Requires Tensor Cores (sm_70+); this project targets sm_80+.
-*/
-__device__ __forceinline__ void wmma_tile_16x16_helper(
-    const __half* __restrict__ A_tile_base, int lda,
-    const __half* __restrict__ B_tile_col_ptr, int ldb,
-    int m_eff, int n_eff, int total_k,
-    float* __restrict__ accum_out,
-    __half* __restrict__ a_pack,   // 16x16 row-major pack buffer in shared memory
-    __half* __restrict__ b_pack)   // 16x16 row-major pack buffer in shared memory
-{
-    const int lane_id = threadIdx.x % WARP_SIZE;
-    wmma::fragment<wmma::accumulator, MMA_M, MMA_N, MMA_K, float> c_frag;
-    wmma::fill_fragment(c_frag, 0.0f);
 
-    int kk = 0;
-    for (; kk < total_k; kk += MMA_K) {
-        const int k_frag = min(MMA_K, total_k - kk);
-
-        const bool full_tile = (m_eff == MMA_M) && (n_eff == MMA_N) && (k_frag == MMA_K);
-        if (full_tile) {
-            // Fast path: direct global loads
-            wmma::fragment<wmma::matrix_a, MMA_M, MMA_N, MMA_K, __half, wmma::row_major> a_frag;
-            wmma::fragment<wmma::matrix_b, MMA_M, MMA_N, MMA_K, __half, wmma::row_major> b_frag;
-            wmma::load_matrix_sync(a_frag, A_tile_base + kk, lda);
-            wmma::load_matrix_sync(b_frag, B_tile_col_ptr + kk * ldb, ldb);
-            wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
-        } else {
-            // Pack with zero padding for partial M/N or K-tail
-            for (int idx = lane_id; idx < MMA_M * MMA_N; idx += WARP_SIZE) {
-                a_pack[idx] = __float2half(0.0f);
-                b_pack[idx] = __float2half(0.0f);
-            }
-            __syncwarp();
-
-            // Pack A: rows [0..m_eff-1], cols [0..k_frag-1]
-            for (int idx = lane_id; idx < MMA_M * MMA_N; idx += WARP_SIZE) {
-                const int ii = idx / MMA_N; // row in 16x16
-                const int jj = idx % MMA_N; // col in 16x16
-                if (ii < m_eff && jj < k_frag) {
-                    a_pack[ii * MMA_N + jj] = A_tile_base[ii * lda + (kk + jj)];
-                }
-            }
-            // Pack B: rows [0..k_frag-1], cols [0..n_eff-1]
-            for (int idx = lane_id; idx < MMA_M * MMA_N; idx += WARP_SIZE) {
-                const int ii = idx / MMA_N; // row in 16x16 (K-frag)
-                const int jj = idx % MMA_N; // col in 16x16 (N-frag)
-                if (ii < k_frag && jj < n_eff) {
-                    b_pack[ii * MMA_N + jj] = B_tile_col_ptr[(kk + ii) * ldb + jj];
-                }
-            }
-            __syncwarp();
-
-            wmma::fragment<wmma::matrix_a, MMA_M, MMA_N, MMA_K, __half, wmma::row_major> a_frag_pack;
-            wmma::fragment<wmma::matrix_b, MMA_M, MMA_N, MMA_K, __half, wmma::row_major> b_frag_pack;
-            wmma::load_matrix_sync(a_frag_pack, a_pack, MMA_N);
-            wmma::load_matrix_sync(b_frag_pack, b_pack, MMA_N);
-            wmma::mma_sync(c_frag, a_frag_pack, b_frag_pack, c_frag);
-        }
-    }
-
-    wmma::store_matrix_sync(accum_out, c_frag, MMA_N, wmma::mem_row_major);
-}
+@cute.jit
+def tc_gemm(mA, mB, mC, BM: cutlass.Constexpr[int],
+            BN: cutlass.Constexpr[int], BK: cutlass.Constexpr[int]):
+    M = mA.shape[0]
+    N = mB.shape[1]
+    # Build the TiledMMA from a tensor-core atom. The exact atom name depends on
+    # the target arch/dtypes; conceptually this is a 16x16x16 HMMA, fp16 in /
+    # fp32 out, tiled across one warp.
+    mma_op = cute.nvgpu.warp.MmaF16BF16Op(
+        cutlass.Float16, cutlass.Float32, (16, 16, 16)
+    )
+    tiled_mma = cute.make_tiled_mma(cute.make_mma_atom(mma_op))
+    grid = (M // BM, N // BN, 1)
+    block = (cute.size(tiled_mma), 1, 1)     # one warp (or warp-group) per CTA
+    tc_gemm_tile_kernel(mA, mB, mC, tiled_mma, BM, BN, BK).launch(
+        grid=grid, block=block
+    )
 ```
+
+**Notes / pitfalls (CuTe DSL):**
+- **Layouts replace pointer math.** `cute.local_tile` derives operand tiles with
+  correct strides from the tensor's own layout — there is no `lda`/`ldb` to get wrong,
+  and no "is B column-major?" trap.
+- **Tails use predication, not packing.** Give `cute.copy` a predicate tensor for
+  edge tiles / K-tail so out-of-range reads yield zero, instead of the CUDA
+  zero-pad-into-scratch-SMEM approach.
+- **Synchronization.** Use `prims.barrier_cta_sync(0)` around the SMEM
+  producer/consumer steps (the CuTe/project equivalent of `__syncwarp()`/`__syncthreads()`).
+- **Architecture.** Tensor cores require sm_70+; this project targets the sm_120
+  (Blackwell/GB10) family via `CUTE_EXPERIMENTAL_DSL_ARCH=sm_120a`.
+- The MMA atom / TiledMMA construction above is illustrative — pick the atom that
+  matches your target arch and operand dtypes.
 
 #### Expert Technique: shared_memory_tiling
 **Performance Impact**: 0% improvement
@@ -176,18 +168,24 @@ __device__ __forceinline__ void wmma_tile_16x16_helper(
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
 
-**Usage Examples**:
-```cuda
-// Shared memory from claude-3.5-sonnet
-__shared__ float shared_A[TILE_SIZE][TILE_SIZE];
-__shared__ float shared_B[TILE_SIZE][TILE_SIZE];
-// Kernel launch from claude-3.5-sonnet
-matrix_multiply_kernel<<<numBlocks, threadsPerBlock>>>(
-// Shared memory from claude-3.5-sonnet
-__shared__ float As[16][16];
-__shared__ float Bs[16][16];
-// Kernel launch from claude-3.5-sonnet
-matmul_kernel<<<numBlocks, threadsPerBlock>>>(
+**Usage Examples** (CuTe DSL, `cutlass.cute` 4.8.0+):
+```python
+# Shared-memory staging tiles: CUDA `__shared__ float As[TS][TS]` becomes a
+# CuTe DSL SMEM-space array declared inside the kernel.
+a_smem = cutlass.Array(cutlass.Float32, (TS, TS), space=cutlass.AddressSpace.smem)
+b_smem = cutlass.Array(cutlass.Float32, (TS, TS), space=cutlass.AddressSpace.smem)
+
+# Cooperative load of one TS×TS K-slice, then a CTA barrier before consuming it
+# (replaces __syncthreads()).
+a_smem[ty, tx] = a[row, bk + tx]
+b_smem[ty, tx] = b[bk + ty, col]
+prims.barrier_cta_sync(0)
+
+# Kernel launch: `matmul_kernel<<<numBlocks, threadsPerBlock>>>(...)` becomes a
+# .launch() on the @cute.kernel, with grid/block computed on the host.
+matmul_kernel(mA, mB, mC, TS).launch(
+    grid=(M // TS, N // TS, 1), block=(TS, TS, 1)
+)
 ```
 
 #### Expert Technique: register_optimization
@@ -199,18 +197,28 @@ matmul_kernel<<<numBlocks, threadsPerBlock>>>(
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
 
-**Usage Examples**:
-```cuda
-// Shared memory from claude-3.5-sonnet
-__shared__ float As[16][16];
-__shared__ float Bs[16][16];
-// Kernel launch from claude-3.5-sonnet
-matmul_kernel<<<numBlocks, threadsPerBlock>>>(
-// Shared memory from claude-3.5-sonnet
-__shared__ float As[BLOCK_SIZE][BLOCK_SIZE];
-__shared__ float Bs[BLOCK_SIZE][BLOCK_SIZE];
-// Kernel launch from claude-3.5-sonnet
-tensor_matmul_kernel<<<blocks, threads>>>(
+**Usage Examples** (CuTe DSL, `cutlass.cute` 4.8.0+):
+```python
+# Register optimization: keep the accumulator in a register across the whole
+# K-loop so there is no SMEM/GMEM round-trip per step. In CuTe DSL a plain
+# scalar (or a partition_fragment_C register fragment for tensor cores) lives
+# in registers.
+acc = cutlass.Float32(0.0)               # accumulator held in a register
+for bk in cutlass.range(0, K, TS):
+    a_smem[ty, tx] = a[row, bk + tx]
+    b_smem[ty, tx] = b[bk + ty, col]
+    prims.barrier_cta_sync(0)
+    for j in cutlass.range(TS):          # inner product stays in registers
+        acc += a_smem[ty, j] * b_smem[j, tx]
+    prims.barrier_cta_sync(0)
+c[row, col] = acc                        # single write-back to GMEM
+
+# For tensor-core paths, the C fragment is the register accumulator:
+#   rC = thr_mma.partition_fragment_C(cta_C)   # lives in registers
+#   cute.gemm(tiled_mma, rC, rA, rB, rC)
+
+# Kernel launch (host side):
+tensor_matmul_kernel(mA, mB, mC, TS).launch(grid=blocks, block=threads)
 ```
 
 #### Expert Technique: memory_coalescing
@@ -223,12 +231,24 @@ tensor_matmul_kernel<<<blocks, threads>>>(
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
 
-**Usage Examples**:
-```cuda
-// Kernel launch from gpt-o1
-batched_matrix_multiply_kernel<<<blocks, threads>>>(
-// Kernel launch from gpt-o1
-matmul_kernel<<<grid, block>>>(A.data_ptr<float>(), B.data_ptr<float>(), C.data_ptr<float>(), M, K, N);
+**Usage Examples** (CuTe DSL, `cutlass.cute` 4.8.0+):
+```python
+# Memory coalescing: make the fastest-varying thread index (tx) index the
+# stride-1 (contiguous) mode of the tensor so a warp reads a contiguous span.
+a_smem[ty, tx] = a[row, bk + tx]   # tx -> consecutive columns  => coalesced
+b_smem[ty, tx] = b[bk + ty, col]   # tx -> consecutive columns  => coalesced
+
+# For explicit control, build a TiledCopy whose thread layout matches the
+# tensor's fastest mode; cute.copy then emits coalesced (and vectorized) loads.
+tiled_copy = cute.make_tiled_copy(
+    cute.make_copy_atom(cute.nvgpu.CopyUniversalOp(), cutlass.Float32),
+    thr_layout, val_layout,
+)
+cute.copy(tiled_copy, gmem_src, smem_dst)
+
+# Kernel launch (host side): raw pointers + <<<grid,block>>> become cute.Tensors
+# (via from_dlpack) passed to a .launch() call.
+matmul_kernel(mA, mB, mC, M, K, N).launch(grid=grid, block=block)
 ```
 
 #### Expert Technique: occupancy_tuning
@@ -240,14 +260,23 @@ matmul_kernel<<<grid, block>>>(A.data_ptr<float>(), B.data_ptr<float>(), C.data_
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
 
-**Usage Examples**:
-```cuda
-// Kernel launch from deepseek-coder
-batched_matmul_kernel<<<num_blocks, block_size>>>(A.data_ptr<float>(), B.data_ptr<float>(), C.data_ptr<float>(), batch_size, m, k, n);
-// Shared memory from claude-3.5-sonnet
-extern __shared__ float shared_mem[];
-// Kernel launch from claude-3.5-sonnet
-square_sum_kernel<<<num_blocks, block_size, block_size * sizeof(float)>>>(
+**Usage Examples** (CuTe DSL, `cutlass.cute` 4.8.0+):
+```python
+# Occupancy tuning: occupancy is driven by the CTA (block) size and the SMEM
+# footprint chosen on the host. Tune `block_size` (and the SMEM tile shapes,
+# which set the per-CTA SMEM usage) to trade off active warps per SM.
+block_size = 256                     # tune: 128 / 256 / 512 for occupancy
+grid = ((batch_size * m * n + block_size - 1) // block_size, 1, 1)
+batched_matmul_kernel(mA, mB, mC, batch_size, m, k, n).launch(
+    grid=grid, block=(block_size, 1, 1)
+)
+
+# Per-CTA SMEM (which competes with occupancy) is sized by the SMEM arrays the
+# kernel declares; smaller staging tiles => more resident CTAs. The CUDA
+# `extern __shared__ float shared_mem[]` becomes a sized SMEM array in the kernel:
+shared_mem = cutlass.Array(cutlass.Float32, (block_size,),
+                           space=cutlass.AddressSpace.smem)
+square_sum_kernel(mIn, mOut, n).launch(grid=grid, block=(block_size, 1, 1))
 ```
 
 #### Expert Technique: dynamic_shared_memory
@@ -258,16 +287,37 @@ square_sum_kernel<<<num_blocks, block_size, block_size * sizeof(float)>>>(
 **Implementation Hints**:
 - Consistently achieves high performance gains
 
-**Usage Examples**:
-```cuda
-// Shared memory from gpt-o1
-extern __shared__ float shared_sum[];  // Shared memory for partial sums
-// Kernel launch from gpt-o1
-matvec_mul_kernel<<<blocks, threads, shared_mem_size>>>(
-// Shared memory from gpt-o1
-extern __shared__ float sdata[];
-// Kernel launch from gpt-o1
-softmax_kernel_batch<<<blocks, threads, shared_mem_size>>>(input_contiguous.data_ptr<float>(), output.data_ptr<float>(), batch_size, dim);
+**Usage Examples** (CuTe DSL, `cutlass.cute` 4.8.0+):
+```python
+# Dynamic shared memory: CUDA sizes `extern __shared__` at *launch* time via the
+# third <<<...>>> argument. In CuTe DSL the SMEM size is a JIT compile-time
+# Constexpr instead — pass it as a kernel argument so the array is sized when the
+# kernel is specialized. (This is the key CUDA->CuTe adjustment.)
+@cute.kernel
+def matvec_mul_kernel(mA, mX, mOut, N,
+                      SMEM_ELEMS: cutlass.Constexpr[int]):
+    shared_sum = cutlass.Array(cutlass.Float32, (SMEM_ELEMS,),
+                               space=cutlass.AddressSpace.smem)  # partial sums
+    ...
+
+# Host side: choose the SMEM element count and pass it as a Constexpr; no
+# runtime shared_mem_size byte argument on .launch().
+smem_elems = threads
+matvec_mul_kernel(mA, mX, mOut, N, smem_elems).launch(
+    grid=blocks, block=(threads, 1, 1)
+)
+
+# Same pattern for a batched softmax reduction (CUDA `extern __shared__ float sdata[]`):
+@cute.kernel
+def softmax_kernel_batch(mIn, mOut, batch_size, dim,
+                         SMEM_ELEMS: cutlass.Constexpr[int]):
+    sdata = cutlass.Array(cutlass.Float32, (SMEM_ELEMS,),
+                          space=cutlass.AddressSpace.smem)
+    ...
+
+softmax_kernel_batch(mIn, mOut, batch_size, dim, threads).launch(
+    grid=blocks, block=(threads, 1, 1)
+)
 ```
 
 
