@@ -261,10 +261,10 @@ impl ControllerInterface for Controller {
                     // Generate a shorter 8-character ID (6 bytes)
                     let short = short_id_with_bytes(6)?;
                     let trajectory_dir = format!(
-                        "{}/logs/{}/{}/rl-ncu/trajectory_{}_{}",
+                        "{}/replay-buffer/{}/{}/rl-ncu/trajectory_{}_{}",
                         parameters.working_dir,
                         parameters.llm_model,
-                        item,
+                        name,
                         x + 1,
                         short
                     );
@@ -275,7 +275,14 @@ impl ControllerInterface for Controller {
                     );
                     fs::create_dir_all(format!("{}/step_0", trajectory_dir.to_owned()))?;
                     let state_category = get_performance_state_category();
-                    let combined = get_combined(state_category)?;
+
+                    log::trace!("[execute_baseline_flow] plan {:?}", plan);
+                    log::trace!("[execute_baseline_flow] state category {}", state_category);
+                    log::trace!("[execute_baseline_flow] ncu report {}", ncu_report);
+                    log::trace!("[execute_baseline_flow] code {}", code);
+
+                    let combined = get_combined(state_category.clone())?;
+
                     let task_prompt = get_task_generate_code_prompt(
                         plan.technique.to_owned(),
                         category.to_owned(),
@@ -350,15 +357,24 @@ impl ControllerInterface for Controller {
             // get baseline state and elapsed_cycles
             // optimization plans were calculated in the baseline run
             // no optimization plan (json) file is found in the step_0 directories
+            let Some(kernel_file) = item.split("/").into_iter().last() else {
+                return Err(Box::from(
+                    "[execute_agent_flow] workflow batch item not properly defined",
+                ));
+            };
+
+            let name = kernel_file.replace(".py", "");
             let baseline_dir = format!(
                 "{}/replay-buffer/{}/{}/rl-ncu/baseline",
-                parameters.working_dir, parameters.llm_model, item
+                parameters.working_dir, parameters.llm_model, name
             );
+            log::debug!("[execute_agent_flow] baseline directory {}", baseline_dir);
+            log::debug!("[execute_agent_flow] reading baseline profile");
             let baseline_ncu_report = fs::read_to_string(format!("{}/profile.txt", baseline_dir))?;
             let baseline_elapsed_cycles = Profile::get_elapsed_cycles(baseline_ncu_report.clone())?;
             let trajectories_dir = format!(
                 "{}/replay-buffer/{}/{}/rl-ncu",
-                parameters.working_dir, parameters.llm_model, item
+                parameters.working_dir, parameters.llm_model, name
             );
 
             let trajectories = get_trajectories(
@@ -390,7 +406,7 @@ impl ControllerInterface for Controller {
                         "{}/replay-buffer/{}/{}/rl-ncu/{}/step_{}",
                         parameters.working_dir,
                         parameters.llm_model,
-                        item,
+                        name,
                         current_trajectory,
                         step
                     );
@@ -404,7 +420,7 @@ impl ControllerInterface for Controller {
                         "{}/replay-buffer/{}/{}/rl-ncu/{}/step_{}",
                         parameters.working_dir,
                         parameters.llm_model,
-                        item,
+                        name,
                         current_trajectory,
                         step + 1
                     );
@@ -460,9 +476,10 @@ impl ControllerInterface for Controller {
 
                     log::info!("[execute_agent_flow] using kernel file : {}", kernel_file);
                     log::info!("[execute_agent_flow] using path : {}", local_target_dir);
+
                     payload = format!(
-                        r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_name": "{}" , "code": {:?} }}"##,
-                        item,
+                        r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" , "code": {:?} }}"##,
+                        name,
                         parameters.working_dir,
                         parameters.gpu_arch,
                         target_dir,
@@ -477,7 +494,7 @@ impl ControllerInterface for Controller {
                     match upload_res {
                         Ok(_) => {
                             log::info!("[execute_agent_flow] kernel uploaded successfully");
-                            flow_control = 1u8;
+                            flow_control = 2u8;
                         }
                         Err(e) => {
                             log::error!("[execute_agent_flow] kernel upload error {}", e);
@@ -495,7 +512,7 @@ impl ControllerInterface for Controller {
                             process_post_call(Some(file_name), url, payload.clone()).await;
                         match exec_res {
                             Ok(exec) => {
-                                if exec.contains("passed") {
+                                if exec.contains("OK") {
                                     log::info!(
                                         "[execute_agent_flow] kernel execute completed successfully"
                                     );

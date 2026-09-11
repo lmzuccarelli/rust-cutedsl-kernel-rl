@@ -2,6 +2,7 @@ use crate::config::load::WorkItem;
 use custom_logger as log;
 use std::env;
 use std::fs;
+use std::path::Path;
 
 pub trait FileInterface {
     async fn kernel_rw(
@@ -27,7 +28,11 @@ impl FileInterface for FileOperation {
         match work_item.kernel_file {
             Some(kernel_file) => {
                 let file = format!("{}/{}", dir, kernel_file);
-                log::debug!("[kernel_rw] file {}", file);
+                if !Path::new(&dir).exists() {
+                    log::debug!("[kernel_rw] creating dir {}", dir);
+                    fs::create_dir_all(&dir)?;
+                }
+                log::debug!("[kernel_rw] kernel file {}", file);
                 if write && work_item.code.is_some() {
                     kernel_code = work_item.code.unwrap_or("".to_string());
                     log::trace!("[kernel_rw] code {}", kernel_code);
@@ -37,9 +42,9 @@ impl FileInterface for FileOperation {
                 }
             }
             None => {
-                // TODO: need to ensure correct name and path
-                let file = format!("kernel-cutedsl/{}", work_item.name);
-                kernel_code = fs::read_to_string(&file)?;
+                return Err(Box::from(
+                    "[kernel_rw] (fileinterface) kernel_file field missing",
+                ));
             }
         }
         Ok(kernel_code)

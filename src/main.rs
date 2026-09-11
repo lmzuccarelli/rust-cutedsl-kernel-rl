@@ -85,7 +85,6 @@ fn main() {
                                         std::process::exit(1);
                                     }
                                 }
-                                *MAP_LOOKUP.lock().unwrap() = Some(hm.clone());
                             }
                             None => {
                                 log::warn!("[main] no token file set for the openapi agent");
@@ -99,6 +98,7 @@ fn main() {
                         std::process::exit(1);
                     }
                 }
+                *MAP_LOOKUP.lock().unwrap() = Some(hm.clone());
             }
             ("llm".to_string(), parameters)
         }
@@ -182,6 +182,7 @@ pub async fn execute(
     log::info!("version     : {}", env!("CARGO_PKG_VERSION"));
     log::info!("server      : {}", command);
     log::info!("model       : {}", parameters.llm_model);
+    log::info!("mode        : {:?}", parameters.controller_mode);
 
     match command.as_str() {
         "init" => {

@@ -14,7 +14,7 @@ use walkdir::WalkDir;
 
 pub fn extract_code(input: String) -> Result<String, Box<dyn std::error::Error>> {
     let start = input.find("```python").unwrap_or(0);
-    let start = start + 7;
+    let start = start + 9;
     let end = input[start..].find("```").unwrap_or(0);
     let end = start + end;
     let result = &input[start..end];

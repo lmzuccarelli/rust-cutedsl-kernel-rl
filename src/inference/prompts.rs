@@ -3,6 +3,8 @@ use std::fs;
 pub fn get_profile_prompt(code: String, ncu_report: String) -> String {
     format!(
         r#"
+Use English in all interactions
+
 You are a GPU performance analysis expert. Analyze this NVIDIA NSight Compute (NCU) profiling report and provide a qualitative summary of the kernel's performance state.
 
 CODE IMPLEMENTATION:
@@ -43,7 +45,10 @@ Focus on qualitative patterns and relationships rather than specific numbers. Lo
 
 pub fn get_state_match_prompt(state: String) -> String {
     format!(
-        r#"You are a GPU optimization expert. Compare the current kernel performance state against known optimization states and find the best match.
+        r#"
+Use English in all interactions
+
+You are a GPU optimization expert. Compare the current kernel performance state against known optimization states and find the best match.
 
 CURRENT STATE TO MATCH:
 {state}
@@ -219,6 +224,8 @@ pub fn get_optimization_plan(
     available_optimizations: String,
 ) -> String {
     format!(r#"
+Use English in all interactions
+
 You are a world-class GPU optimisation expert.  Based on the kernel implementation and the qualitative state analysis below, choose the **{top_n}** optimisation techniques that are most likely to improve performance.  
 From the list of AVAILABLE OPTIMISATIONS pick only those with the highest relevance to the observed performance characteristics **and** the specific code patterns you see.
 
@@ -263,6 +270,8 @@ pub fn get_best_optimization_prompt(
 ) -> String {
     format!(
         r#"
+Use English in all interactions
+
 You are a GPU optimisation expert. A kernel has been analysed and its qualitative performance characteristics are shown below.
 From the list of available optimisation techniques pick the ONE technique that you judge will yield the largest performance gain. 
 Respond STRICTLY in the format:
@@ -601,8 +610,8 @@ APPROACH:
 }
 
 pub fn get_combined(state_category: String) -> Result<String, Box<dyn std::error::Error>> {
-    let header = fs::read_to_string("kernelbench-cuda/data/optimization_database_header.md")?;
-    let footer = fs::read_to_string("kernelbench-cuda/data/optimization_database_footer.md")?;
+    let header = fs::read_to_string("kernel-cutedsl/data/optimization_database_header.md")?;
+    let footer = fs::read_to_string("kernel-cutedsl/data/optimization_database_footer.md")?;
     let combined = format!(
         r#"{header}
 {state_category}

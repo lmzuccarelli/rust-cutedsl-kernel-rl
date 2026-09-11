@@ -53,9 +53,9 @@ pub struct Usage {
     #[serde(rename = "total_tokens")]
     pub total_tokens: i64,
     #[serde(rename = "prompt_tokens_details")]
-    pub prompt_tokens_details: PromptTokensDetails,
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
     #[serde(rename = "completion_tokens_details")]
-    pub completion_tokens_details: CompletionTokensDetails,
+    pub completion_tokens_details: Option<CompletionTokensDetails>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -89,6 +89,12 @@ pub struct RequestSchema {
     pub top_p: f64,
     pub stream: bool,
     pub max_tokens: i32,
+    pub chat_template_kwargs: Option<ChatTemplate>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatTemplate {
+    enable_thinking: bool,
 }
 
 #[allow(unused)]
@@ -190,6 +196,12 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
             content: prompt,
         };
         let vec_msgs = vec![system_msg, user_msg];
+
+        // TODO: check if kwargs is supported
+        // This is used to suppress thinking in qwen3.8-27B
+        let ct = ChatTemplate {
+            enable_thinking: false,
+        };
         let rs = RequestSchema {
             model,
             temperature: 0.1,
@@ -197,6 +209,7 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
             max_tokens: 32000,
             top_p: 0.8,
             messages: vec_msgs,
+            chat_template_kwargs: Some(ct.clone()),
         };
         let json_request = serde_json::to_string(&rs)?;
         log::trace!("[run] openapi json payload {}", json_request);
