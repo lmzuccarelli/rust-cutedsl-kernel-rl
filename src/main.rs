@@ -117,24 +117,6 @@ fn main() {
                     std::process::exit(1);
                 }
             }
-            /*
-            match env::var("LD_LIBRARY_PATH") {
-                Ok(val) => {
-                    let contents = val.to_string();
-                    if contents.is_empty()
-                        || !contents.contains("cuda")
-                        || !contents.contains("CUPTI")
-                    {
-                        log::error!("[main] no cuda libraries found in LD_LIBRARY_PATH");
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    log::error!("[main] LD_LIBRARY_PATH envar not set {}", e);
-                    std::process::exit(1);
-                }
-            }
-            */
             // parameters used in service
             let mut hm: HashMap<String, String> = HashMap::new();
 
@@ -155,6 +137,12 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+
+            // insert cutedsl environment path
+            hm.insert(
+                "cutedsl_env_path".to_string(),
+                parameters.cutedsl_env_path.clone(),
+            );
 
             let gpu_arch_res = ShellExecute::run("nvidia-smi", vec!["--query-gpu=compute_cap"]);
             // preserve output

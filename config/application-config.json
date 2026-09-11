@@ -7,6 +7,7 @@
     "kernel-cutedsl/kernels/square_gemm.py"
   ],
   "working_dir": "/home/lzuccarelli/Projects/rust-cutedsl-kernel-rl",
+  "cutedsl_env_path": "/home/lzuccarelli/Projects/cutlass/target_cute_env",
   "llm_agent": "Api",
   "llm_model": "qwen3-8-27b",
   "controller_mode": "Baseline",

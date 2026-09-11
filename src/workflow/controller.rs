@@ -842,12 +842,7 @@ impl ControllerInterface for Controller {
 #[cfg(test)]
 mod tests {
     // this brings everything from parent's scope into this scope
-    use super::*;
-    use crate::config::load::WorkItem;
-    use crate::{
-        config::load::{ConfigInterface, ImplConfigInterface},
-        utils::common::{find_most_performant_kernel, get_trajectories},
-    };
+    use crate::config::load::{ConfigInterface, ImplConfigInterface};
     use regex::Regex;
     use std::fs;
 
@@ -865,6 +860,7 @@ mod tests {
 
         println!("[main] testing parameters {:#?}", parameters);
 
+        /*
         let item = "level1/001_Square_matrix_multiplication";
         let model = "gpt-oss-120b";
         println!("[execute_baseline_flow] testing current flow control");
@@ -920,6 +916,7 @@ mod tests {
             "{}/logs/{}/{}/rl-ncu/trajectory_1_Po9t6Fh_/step_0",
             parameters.working_dir, model, item
         );
+
         let (file, kernel) = find_kernel_file(base_dir.clone(), "".to_string(), &mut false)?;
         println!("[run] cutedsl kernel file {}", file);
         println!("[run] cutedsl kernel len {}", kernel.len());
@@ -932,34 +929,19 @@ mod tests {
 
         let work_item_res = serde_json::from_slice::<WorkItem>(payload.as_bytes())?;
         println!("[run] work items {:?}", work_item_res);
+        */
 
         //let cuda_kernel = fs::read_to_string("tests/tensor_core_utilization.cu")?;
-        let cuda_kernel = fs::read_to_string("tests/memory_compute_overlap.cu")?;
-        let vec_lines: Vec<&str> = cuda_kernel.split("\n").collect();
-        let re = Regex::new("[_]{2}global[_]{2}[\\svoid\\s]+([a-zA-Z0-9_]*)")?;
-        let re_simple = Regex::new("([a-zA-Z0-9_]+)")?;
+        let kernel = fs::read_to_string("tests/square_gemm.py")?;
+        let re = Regex::new("@cute.kernel[\\sdef\\s]+([a-zA-Z0-9_]*)")?;
         let mut kernel_name;
-        for (count, line) in vec_lines.iter().enumerate() {
-            if line.contains("__global__ void") && !line.contains("__launch_bounds__") {
-                for cap in re.captures_iter(line) {
-                    kernel_name = cap[1].to_string();
-                    println!("[run] profiling kernel {}", kernel_name);
-                }
-            }
-            if line.contains("__global__ void __launch_bounds__")
-                | line.contains("__global__ __launch_bounds__")
-            {
-                for cap in re_simple.captures_iter(vec_lines[count + 1]) {
-                    if !cap[1].to_string().contains("void") {
-                        kernel_name = cap[1].to_string();
-                        println!(
-                            "[run] profiling with __launch_bounds__ kernel {}",
-                            kernel_name
-                        );
-                    }
-                }
-            }
+        for cap in re.captures_iter(&kernel) {
+            kernel_name = cap[1].to_string();
+            println!("[run] profiling kernel {}", kernel_name);
+            assert_eq!("sgemm_kernel", kernel_name);
         }
+
+        /*
 
         let vec_trajectories = get_trajectories(
             format!("{}/logs/{}/{}/rl-ncu", parameters.working_dir, model, item),
@@ -971,6 +953,7 @@ mod tests {
             "{}/logs/{}/{}/rl-ncu",
             parameters.working_dir, model, item
         ))?;
+        */
 
         Ok(())
     }

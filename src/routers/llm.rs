@@ -1,8 +1,8 @@
-use crate::MAP_LOOKUP;
 use crate::config::load::LlmAgent;
 use crate::inference::llm::{
     LlmClaude, LlmInterface, LlmInterfaceOpenApi, LlmOpenApi, LlmOpenCode,
 };
+use crate::utils::common::get_item;
 use custom_logger as log;
 use http::{Method, Request, Response, StatusCode};
 use http_body_util::BodyExt;
@@ -107,26 +107,4 @@ async fn execute_agent(agent_type: LlmAgent, prompt: String) -> (StatusCode, Str
 
 fn get_agent(params: Vec<&str>) -> LlmAgent {
     LlmAgent::from_str(params.last().unwrap_or(&"none")).unwrap_or(LlmAgent::Claude)
-}
-
-fn get_item(name: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let hm_guard = MAP_LOOKUP.lock().map_err(|_| "mutex lock failed")?;
-    let value = match hm_guard.as_ref() {
-        Some(res) => {
-            let item_value = res.get(name);
-            match item_value {
-                Some(final_value) => final_value,
-                None => {
-                    return Err(Box::from(format!(
-                        "[get_item] hashmap lookup {} not found",
-                        name
-                    )));
-                }
-            }
-        }
-        None => {
-            return Err(Box::from("[get_item] error validating hashmap lookup"));
-        }
-    };
-    Ok(value.to_string())
 }

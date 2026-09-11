@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "rust-cutedsl-kernel-rl"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "async-trait",
  "clap",
