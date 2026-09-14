@@ -50,6 +50,7 @@ directly. Tensor-core MMA is expressed declaratively:
    **register fragments** (`thr_mma.partition_fragment_A/_B/_C`).
 4. Run the K-reduction with `cute.gemm(tiled_mma, acc, rA, rB, acc)`, which lowers
    straight to the tensor-core MMA instruction.
+5. If you use the from_dlpack library ensure its set correctly to the  cute.runtime i.e 'cute.runtime.from_dlpack(A)'
 
 Compared to the CUDA version this removes all manual `lda`/`ldb` pointer math, the
 `__syncwarp()` producer/consumer dance, and the hand-written zero-padding pack loop:

@@ -191,26 +191,14 @@ pub fn find_kernel_file(
             }
         }
     }
-    if *fallback | kernel.is_empty() {
-        if fallback_kernel.is_empty() {
-            let baseline_fallback_path = dir.split("trajectory_").next().unwrap_or("");
-            let contents =
-                fs::read_to_string(format!("{}/baseline/init.py", baseline_fallback_path))?;
-            fs::copy(
-                format!("{}/baseline/init.py", baseline_fallback_path),
-                format!("{}/init.py", dir),
-            )?;
-            kernel = contents.chars().filter(|c| c.is_ascii()).collect();
-            file = "init.py".to_string();
-        } else {
-            log::debug!("[find_cuda_file] current directory : {}", dir);
-            log::debug!("[find_cuda_file] fallback using : {}", fallback_kernel);
-            let contents = fs::read_to_string(&fallback_kernel)?;
-            file = fallback_kernel.split("/").last().unwrap_or("").to_string();
-            kernel = contents.chars().filter(|c| c.is_ascii()).collect();
-            log::debug!("[find_cuda_file] copying fallback kernel");
-            fs::copy(fallback_kernel, format!("{}/{}", dir, file))?;
-        }
+    if *fallback {
+        log::debug!("[find_cuda_file] current directory : {}", dir);
+        log::debug!("[find_cuda_file] fallback using : {}", fallback_kernel);
+        let contents = fs::read_to_string(&fallback_kernel)?;
+        file = fallback_kernel.split("/").last().unwrap_or("").to_string();
+        kernel = contents.chars().filter(|c| c.is_ascii()).collect();
+        log::debug!("[find_cuda_file] copying fallback kernel");
+        fs::copy(fallback_kernel, format!("{}/{}", dir, file))?;
         *fallback = false;
     }
     Ok((file, kernel))

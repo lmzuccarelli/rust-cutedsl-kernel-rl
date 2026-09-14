@@ -43,9 +43,14 @@ pub struct OptimizationPlan {
 impl ControllerInterface for Controller {
     fn init(parameters: Parameters) -> Result<(), Box<dyn std::error::Error>> {
         for item in parameters.workflow_batch.iter() {
+            let Some(name) = item.split("/").into_iter().last() else {
+                return Err(Box::from("[init] workflow batch item not properly defined"));
+            };
             clean_trajectories(format!(
                 "{}/replay-buffer/{}/{}/rl-ncu/",
-                parameters.working_dir, parameters.llm_model, item
+                parameters.working_dir,
+                parameters.llm_model,
+                name.replace(".py", "")
             ))?;
         }
         Ok(())
@@ -357,13 +362,13 @@ impl ControllerInterface for Controller {
             // get baseline state and elapsed_cycles
             // optimization plans were calculated in the baseline run
             // no optimization plan (json) file is found in the step_0 directories
-            let Some(kernel_file) = item.split("/").into_iter().last() else {
+            let Some(baseline_kernel_file) = item.split("/").into_iter().last() else {
                 return Err(Box::from(
                     "[execute_agent_flow] workflow batch item not properly defined",
                 ));
             };
 
-            let name = kernel_file.replace(".py", "");
+            let name = baseline_kernel_file.replace(".py", "");
             let baseline_dir = format!(
                 "{}/replay-buffer/{}/{}/rl-ncu/baseline",
                 parameters.working_dir, parameters.llm_model, name
@@ -384,8 +389,8 @@ impl ControllerInterface for Controller {
 
             // show all trajectories
             log::debug!("[execute_agent_flow] trajectories {:#?}", trajectories);
-            let mut track_fallback_kernel: String = String::new();
-            let mut track_max_reward = 0.0;
+            let mut track_fallback_kernel = format!("{}/{}", baseline_dir, baseline_kernel_file);
+            let track_max_reward = 0.0;
 
             // from previous execution we know these kernel optimization techniques are
             // problematic (compilation, execution and/or profiling)
@@ -424,6 +429,7 @@ impl ControllerInterface for Controller {
                         current_trajectory,
                         step + 1
                     );
+
                     if step < parameters.max_rollout - 1 {
                         let res = fs::create_dir_all(next_target_dir.clone());
                         match res {
@@ -452,7 +458,6 @@ impl ControllerInterface for Controller {
                     let code = String::new();
                     let mut ncu_report = String::new();
                     let mut state = String::new();
-                    let kernel_file = String::new();
                     let mut plans: Vec<OptimizationPlan> = vec![];
 
                     // handles flow control for fine grained tasks
@@ -464,17 +469,20 @@ impl ControllerInterface for Controller {
                     if fallback {
                         log::trace!("{payload}");
                         log::trace!("{code}");
-                        log::trace!("{kernel_file}");
+                        log::trace!("{track_fallback_kernel}");
                         log::warn!("[execute_agent_flow] fallback set");
                     }
 
-                    let (kernel_file, kernel_code) = find_kernel_file(
+                    let (current_kernel_file, current_kernel_code) = find_kernel_file(
                         local_target_dir.clone(),
-                        track_fallback_kernel.clone(),
+                        track_fallback_kernel.to_string(),
                         &mut fallback,
                     )?;
 
-                    log::info!("[execute_agent_flow] using kernel file : {}", kernel_file);
+                    log::info!(
+                        "[execute_agent_flow] current kernel file : {}",
+                        current_kernel_file
+                    );
                     log::info!("[execute_agent_flow] using path : {}", local_target_dir);
 
                     payload = format!(
@@ -483,12 +491,15 @@ impl ControllerInterface for Controller {
                         parameters.working_dir,
                         parameters.gpu_arch,
                         target_dir,
-                        kernel_file,
-                        kernel_code
+                        current_kernel_file,
+                        current_kernel_code
                     );
 
                     // 2. upload kernel
-                    log::info!("[execute_agent_flow] uploading kernel : {}", kernel_file);
+                    log::info!(
+                        "[execute_agent_flow] uploading kernel : {}",
+                        current_kernel_file
+                    );
                     let url = format!("{}/v1/upload", parameters.gpu_server_url);
                     let upload_res = process_post_call(None, url.clone(), payload.clone()).await;
                     match upload_res {
@@ -522,7 +533,7 @@ impl ControllerInterface for Controller {
                                         "[execute_agent_flow] kernel execute response 'failed'"
                                     );
                                     if parameters.use_error_vec {
-                                        let technique = kernel_file
+                                        let technique = current_kernel_file
                                             .clone()
                                             .split(".py")
                                             .next()
@@ -540,7 +551,7 @@ impl ControllerInterface for Controller {
                             Err(e) => {
                                 log::error!("[execute_agent_flow] kernel execute failed {}", e);
                                 if parameters.use_error_vec {
-                                    let technique = kernel_file
+                                    let technique = current_kernel_file
                                         .clone()
                                         .split(".py")
                                         .next()
@@ -598,18 +609,20 @@ impl ControllerInterface for Controller {
                         // setup fallback directory and cutedsl kernel if reward is higher than the
                         // tracking_max_reward
                         if reward > track_max_reward {
-                            track_max_reward = reward;
-                            track_fallback_kernel = format!("{}/{}", local_target_dir, kernel_file);
-                            log::warn!(
-                                "[execute_agent_flow] setting fallback kernel to : {} with path : {}",
-                                kernel_file,
-                                local_target_dir
-                            );
+                            // TODO:
+                            // track_max_reward = reward;
+                            // track_fallback_kernel = format!("{}/{}", local_target_dir, kernel_file);
+                            // log::warn!(
+                            //    "[execute_agent_flow] setting fallback kernel to : {} with path : {}",
+                            //    kernel_file,
+                            //    local_target_dir
+                            // );
                         }
+
                         if perc < parameters.degradation_threshold {
                             log::warn!("[execute_agent_flow] degradation greater than 10%");
                             if parameters.use_error_vec {
-                                let technique = kernel_file
+                                let technique = current_kernel_file
                                     .clone()
                                     .split(".py")
                                     .next()
@@ -637,7 +650,7 @@ impl ControllerInterface for Controller {
                             // the acceptance_threshold criteria
                             log::info!(
                                 "[execute_agent_flow] detected cutedsl kernel with reward > threshold {} exiting trajectories",
-                                kernel_file
+                                current_kernel_file
                             );
                             break 'trajectories;
                         }
@@ -747,17 +760,20 @@ impl ControllerInterface for Controller {
 
                     // 7. create complex prompt and execute for the next step
                     if flow_control & 32u8 == 32u8 {
-                        // if this fails it due to regex (it will break our loop)
+                        // if this fails it's due to regex (it will break our loop)
                         log::info!(
                             "[execute_agent_flow] setting up for the next step ({})",
                             step + 1
                         );
                         let category = Profile::get_category(state.clone())?;
+
+                        // TODO: why?
                         let current_best_plan = track_fallback_kernel
                             .split("/")
                             .last()
                             .unwrap_or("none")
                             .to_owned();
+
                         let plan = pick_weighted(
                             plans.clone(),
                             vec_error_techniques.clone(),
@@ -768,6 +784,7 @@ impl ControllerInterface for Controller {
                             "[execute_agent_flow] exclude plans {:?}",
                             vec_error_techniques
                         );
+
                         let state_category = get_performance_state_category();
                         // if file read files this should break the loop
                         let combined = get_combined(state_category)?;
@@ -817,7 +834,7 @@ impl ControllerInterface for Controller {
                                 // extract code
                                 let code = extract_code(contents)?;
                                 let wr_res = fs::write(
-                                    format!("{}/{}.cu", next_target_dir, plan.technique),
+                                    format!("{}/{}.py", next_target_dir, plan.technique),
                                     code,
                                 );
                                 match wr_res {
@@ -845,7 +862,9 @@ impl ControllerInterface for Controller {
                             }
                         }
                     }
+                    track_fallback_kernel = current_kernel_file
                 }
+                // end of rollout (step) loop
             }
             // finally find the optimal cutedsl kernel
             if parameters.create_stats {
