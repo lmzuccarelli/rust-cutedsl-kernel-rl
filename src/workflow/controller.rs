@@ -417,7 +417,7 @@ impl ControllerInterface for Controller {
                     );
                     let target_dir = local_target_dir.replace("/replay-buffer/", "/out/");
                     log::info!(
-                        "[execute_agent_flow] replay buffer directory : {}",
+                        "[execute_agent_flow] replay buffer directory {}",
                         local_target_dir
                     );
 
@@ -435,13 +435,13 @@ impl ControllerInterface for Controller {
                         match res {
                             Ok(_) => {
                                 log::info!(
-                                    "[execute_agent_flow] created next step directory : {}",
+                                    "[execute_agent_flow] created next step directory {}",
                                     next_target_dir
                                 );
                             }
                             Err(e) => {
                                 log::error!(
-                                    "[execute_agent_flow] failed to create directory : {}",
+                                    "[execute_agent_flow] failed to create directory {}",
                                     e
                                 );
                                 // this is a critical error
@@ -463,14 +463,16 @@ impl ControllerInterface for Controller {
                     // handles flow control for fine grained tasks
                     let mut flow_control = 0u8;
 
-                    log::trace!("{flow_control}");
+                    log::debug!("[execute_agent_flow] flow controll value {flow_control}");
 
                     // 1. read kernel code
                     if fallback {
                         log::trace!("{payload}");
                         log::trace!("{code}");
-                        log::trace!("{track_fallback_kernel}");
                         log::warn!("[execute_agent_flow] fallback set");
+                        log::warn!(
+                            "[execute_agent_flow] track fallback kernel {track_fallback_kernel}"
+                        );
                     }
 
                     let (current_kernel_file, current_kernel_code) = find_kernel_file(
@@ -480,10 +482,10 @@ impl ControllerInterface for Controller {
                     )?;
 
                     log::info!(
-                        "[execute_agent_flow] current kernel file : {}",
+                        "[execute_agent_flow] current kernel file {}",
                         current_kernel_file
                     );
-                    log::info!("[execute_agent_flow] using path : {}", local_target_dir);
+                    log::info!("[execute_agent_flow] using path {}", local_target_dir);
 
                     payload = format!(
                         r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" , "code": {:?} }}"##,
@@ -588,13 +590,13 @@ impl ControllerInterface for Controller {
                         let elapsed_cycles = Profile::get_elapsed_cycles(ncu_report.clone())?;
 
                         // 5b. calculate improvement/degradation
-                        log::info!("[execute_agent_flow] elapsed cycles : {}", elapsed_cycles);
+                        log::info!("[execute_agent_flow] elapsed cycles {}", elapsed_cycles);
                         let (perc, reward) = Profile::calculate_improvement(
                             baseline_elapsed_cycles,
                             elapsed_cycles,
                         )?;
                         log::info!(
-                            "[execute_agent_flow] percentage improvement {} : reward {}",
+                            "[execute_agent_flow] percentage improvement {} reward {}",
                             perc,
                             reward
                         );
@@ -751,7 +753,7 @@ impl ControllerInterface for Controller {
                         // check if we have reached the max_rollout value
                         if step == parameters.max_rollout - 1 {
                             log::info!(
-                                "[execute_agent_flow] max_rollout reached : exiting flow gracefully"
+                                "[execute_agent_flow] max_rollout reached exiting flow gracefully"
                             );
                             break;
                         }
@@ -862,7 +864,7 @@ impl ControllerInterface for Controller {
                             }
                         }
                     }
-                    track_fallback_kernel = current_kernel_file
+                    track_fallback_kernel = format!("{}/{}", local_target_dir, current_kernel_file);
                 }
                 // end of rollout (step) loop
             }

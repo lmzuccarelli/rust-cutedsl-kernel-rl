@@ -1,7 +1,5 @@
 use crate::config::load::WorkItem;
 use custom_logger as log;
-// use std::env;
-// use std::fs;
 use std::process::Command;
 use std::time::Instant;
 
@@ -39,10 +37,14 @@ impl ExecuteInterface for Execute {
             Ok(result) => {
                 let stdout = String::from_utf8_lossy(&result.stdout).trim().to_string();
                 let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
-                if !result.status.success() {
+                if !result.status.success() || stdout.to_lowercase().contains("failed") {
+                    let output = match stderr.is_empty() {
+                        true => stdout,
+                        false => stderr,
+                    };
                     return Err(Box::from(format!(
-                        "[run] (executeinterface) {}",
-                        stderr.to_string()
+                        "[run] (executeinterface) result (exited non zero) {}",
+                        output.to_string()
                     )));
                 }
                 // preserve output

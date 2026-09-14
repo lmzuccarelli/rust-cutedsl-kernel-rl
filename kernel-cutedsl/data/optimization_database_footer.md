@@ -31,6 +31,18 @@ This database integrates with the comprehensive GPU optimization decision tree t
 
 The LLM agents use this database as a **living reference** that evolves based on actual optimization results, enabling continuous improvement in optimization strategy selection and performance prediction.
 
+**IMPORTANT**
+
+When targeting kernels for the NVIDIA GB10 (sm_121) on the DGX Spark workstation. Take note of the following
+
+CRITICAL HARDWARE CONSTRAINTS:
+1. Target architecture is compute capability 12.1 (sm_121). Do NOT generate sm_100 or sm_90 code.
+2. The hardware DOES NOT support tcgen05, TMEM, WGMMA, or multicast TMA. 
+3. Fall back to standard SM80/SM90 cooperative layouts using mma.sync warp-level instructions mapped onto Blackwell's core tensor structures.
+4. Hard-cap all Shared Memory (Smem) allocation layouts to remain under 99 KB per thread block to prevent allocation failure.
+5. Maximize utilization of the native NVFP4/FP8 tensor pipeline, utilizing custom swizzling math to mitigate the tight 273 GB/s LPDDR5X memory bandwidth bottleneck.
+
+
 ### Learned Optimization Strategies
 
 #### Expert Technique: tensor_core_utilization
@@ -51,6 +63,10 @@ directly. Tensor-core MMA is expressed declaratively:
 4. Run the K-reduction with `cute.gemm(tiled_mma, acc, rA, rB, acc)`, which lowers
    straight to the tensor-core MMA instruction.
 5. If you use the from_dlpack library ensure its set correctly to the  cute.runtime i.e 'cute.runtime.from_dlpack(A)'
+6. Ensure peoper use of 2D blocks,  launch from block = (THREADS, 1, 1) to a 2D block block = (BN, BM, 1) so that tx ∈ [0, BN) and ty ∈ [0, BM) as the kernel assumes. This is valid because BN * BM == THREADS (32*32 == 1024). Keep the grid as (M // BM, N // BN, 1).
+   Constraints / verification:
+   - Do not change the kernel's indexing logic or the XOR swizzle — only make the launch geometry match the kernel's assumptions.
+   - The kernel assumes BM * BN == THREADS; if you want it more robust, add an assertion or derive the 2D block from that relationship, but the minimal correct change is the block = (BN, BM, 1) launch.he block launch from block = (THREADS, 1, 1) to a 2D block block = (BN, BM, 1) so that tx ∈ [0, BN) and ty ∈ [0, BM) as the kernel assumes. This is valid because BN * BM == THREADS (32*32 == 1024). Keep the grid as (M // BM, N // BN, 1).
 
 Compared to the CUDA version this removes all manual `lda`/`ldb` pointer math, the
 `__syncwarp()` producer/consumer dance, and the hand-written zero-padding pack loop:
