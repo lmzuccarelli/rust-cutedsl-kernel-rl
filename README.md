@@ -39,7 +39,7 @@ The installation of these dependencies is out of scope for this project and it's
 
 ## Workflow
 
-There are basically 3 type of endpoint servers
+There are basically 2 type of endpoint servers
 
 - llm (for inferencing)
 - gpu
@@ -87,24 +87,22 @@ export LD_LIBRARY_PATH=/usr/local/cuda-<version>/lib64:/usr/local/cuda/extras/CU
 Use the following cli in the specific "trajectory_XXX/step_XXX/build" directory on the gpu server (base directory is "out") on the gpu server
 
 ```bash
-# change the GPU_ARCH_VERSION as needed
-cmake -DCMAKE_PREFIX_PATH=/usr/local/libtorch -DCMAKE_BUILD_TYPE=Release .. -DGPU_ARCH_VERSION=86
-
-cmake --build . --config Release
+python3 <kernel-name>.py
 ```
 
 ### Manually profile cutedsl kernels
 
-Look for the kernel name in file cuda_model.cu (search for __global__)
+Look for the kernel name in file kernel_file.py (search for @cute.kernel annotation)
 
 Use the following cli to execute a profile
 
 ```bash
 
-sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} ncu --set full -k <kernel-name> -o profile-<kernel-name> -f main
+# execute all metrics (this will include Speed of Light)
+sudo ncu --target-processes all --kernel-name regex:<kernel-function_name> --set full -o profile-<kernel-name> -f /bin/python3 kernel_file.py
 
 # convert to text format
-sudo LD_LIBRARY_PATH=${LD_LIBRARY_PATH} ncu --import profile-<kernel-name>.ncu-rep --page details
+sudo ncu --import profile-<kernel-name>.ncu-rep --page details > kernel-name.profile
 
 ```
 
