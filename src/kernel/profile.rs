@@ -100,6 +100,10 @@ impl ProfileInterface for Profile {
             match convert_output_res {
                 Ok(output) => {
                     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    // check for any profiling and/or profile conversion errors
+                    if stdout.contains("ERROR") {
+                        return Err(Box::from(stdout));
+                    }
                     let elapsed = start.elapsed();
                     log::info!(
                         "[run] (profileinterface) convert completed task in {:?}",
