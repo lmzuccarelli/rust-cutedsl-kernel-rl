@@ -4,6 +4,7 @@ use reqwest::Client;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
+use std::fs;
 use std::process::Command;
 use std::time::Duration;
 use std::time::Instant;
@@ -127,7 +128,16 @@ impl LlmInterface for LlmClaude {
         log::debug!("[run] executing llm claude inference endpoint");
         let start = Instant::now();
 
-        let output = Command::new("claude").args(vec!["-p", &prompt]).output()?;
+        // Due to ARG_MAX issues write the prompt to file and ask claude to read the file
+        fs::write("/tmp/prompt.txt", prompt)?;
+
+        let file_prompt = format!(
+            "read the file {} and execute as per instructions",
+            "/tmp/prompt.txt"
+        );
+        let output = Command::new("claude")
+            .args(vec!["-p", &file_prompt])
+            .output()?;
 
         let elapsed = start.elapsed();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
