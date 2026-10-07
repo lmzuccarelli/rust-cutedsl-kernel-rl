@@ -129,11 +129,11 @@ impl LlmInterface for LlmClaude {
         let start = Instant::now();
 
         // Due to ARG_MAX issues write the prompt to file and ask claude to read the file
-        fs::write("/tmp/prompt.txt", prompt)?;
+        fs::write("prompt.txt", prompt)?;
 
         let file_prompt = format!(
             "read the file {} and execute as per instructions",
-            "/tmp/prompt.txt"
+            "prompt.txt"
         );
         let output = Command::new("claude")
             .args(vec!["-p", &file_prompt])
