@@ -4,6 +4,7 @@ use custom_logger as log;
 use regex::Regex;
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
@@ -89,10 +90,17 @@ impl ProfileInterface for Profile {
                 }
             };
 
+            // check if output has been compressed
+            let profile_file = format!("profile-{}.ncu-repz", name);
+            let profile_file_name = match Path::new(&profile_file).exists() {
+                true => profile_file,
+                false => format!("profile-{}.ncu-rep", name),
+            };
+
             let convert_output_res = Command::new("sudo")
                 .arg("/usr/local/cuda/bin/ncu")
                 .arg("--import")
-                .arg(format!("profile-{}.ncu-rep", name))
+                .arg(profile_file_name)
                 .arg("--page")
                 .arg("details")
                 .output();
