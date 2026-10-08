@@ -244,6 +244,7 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
             .post(url)
             .bearer_auth(token.trim())
             .header("Content-Type", "application/json")
+            .header("X-Api-Key", token.trim())
             .body(json_request)
             .send()
             .await;
