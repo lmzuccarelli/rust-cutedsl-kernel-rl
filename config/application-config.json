@@ -10,6 +10,7 @@
   "cutedsl_env_path": "/home/lzuccarelli/Projects/cutlass/target_cute_env",
   "llm_agent": "Api",
   "llm_model": "qwen3-8-27b",
+  "response_type": "Opneai",
   "controller_mode": "Agent",
   "openapi_url": "http://192.168.1.6:8001/v1/chat/completions",
   "max_rollout": 10,

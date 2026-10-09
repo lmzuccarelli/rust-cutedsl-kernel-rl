@@ -4,12 +4,50 @@ use reqwest::Client;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
-use std::fs;
 use std::process::Command;
 use std::time::Duration;
 use std::time::Instant;
 
 // openapi schema
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnMaasResponse {
+    pub content: Vec<Content>,
+    pub id: String,
+    pub model: String,
+    pub role: String,
+    #[serde(rename = "stop_reason")]
+    pub stop_reason: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+    pub usage: EnMaasUsage,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Content {
+    pub signature: Option<String>,
+    pub thinking: Option<String>,
+    #[serde(rename = "type")]
+    pub type_field: String,
+    pub text: String,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnMaasUsage {
+    #[serde(rename = "cache_creation_input_tokens")]
+    pub cache_creation_input_tokens: i64,
+    #[serde(rename = "cache_read_input_tokens")]
+    pub cache_read_input_tokens: i64,
+    #[serde(rename = "input_tokens")]
+    pub input_tokens: i64,
+    #[serde(rename = "output_tokens")]
+    pub output_tokens: i64,
+    #[serde(rename = "prompt_tokens_details")]
+    pub prompt_tokens_details: PromptTokensDetails,
+}
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,6 +154,7 @@ pub trait LlmInterfaceOpenApi {
         url: String,
         token: String,
         model: String,
+        response_type: String,
     ) -> Result<String, Box<dyn std::error::Error>>;
 }
 
@@ -128,16 +167,8 @@ impl LlmInterface for LlmClaude {
         log::debug!("[run] executing llm claude inference endpoint");
         let start = Instant::now();
 
-        // Due to ARG_MAX issues write the prompt to file and ask claude to read the file
-        fs::write("prompt.txt", prompt)?;
-
-        let file_prompt = format!(
-            "read the file {} and execute as per instructions",
-            "prompt.txt"
-        );
-        let output = Command::new("claude")
-            .args(vec!["-p", &file_prompt])
-            .output()?;
+        // TODO: address ARG_MAX issues
+        let output = Command::new("claude").args(vec!["-p", &prompt]).output()?;
 
         let elapsed = start.elapsed();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -189,11 +220,13 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
         url: String,
         token: String,
         model: String,
+        response_type: String,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        log::debug!("[run] executing llm openapi inference endpoint");
-        log::debug!("[run] executing llm openapi url {}", url);
-        log::debug!("[run] executing llm openapi model {}", model);
-        log::debug!("[run] executing llm openapi prompt len {}", prompt.len());
+        log::debug!("[run] executing llm {} inference endpoint", response_type);
+        log::debug!("[run] executing llm url {}", url);
+        log::debug!("[run] executing llm model {}", model);
+        log::debug!("[run] executing llm prompt len {}", prompt.len());
+        log::debug!("[run] executing llm prompt len {}", prompt.len());
 
         let start = Instant::now();
 
@@ -212,6 +245,7 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
         let ct = ChatTemplate {
             enable_thinking: false,
         };
+
         let rs = RequestSchema {
             model,
             temperature: 0.1,
@@ -260,9 +294,23 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
                             "[run] llm openapi client response {}",
                             String::from_utf8(contents.to_vec()).unwrap()
                         );
-                        let chat_response: OpenaiChatCompletions =
-                            serde_json::from_slice(&contents)?;
-                        chat_response.choices[0].message.content.clone()
+                        match response_type.as_str() {
+                            "Enmaas" => {
+                                let chat_response: EnMaasResponse =
+                                    serde_json::from_slice(&contents)?;
+                                chat_response.content[0].text.clone()
+                            }
+                            "Openai" => {
+                                let chat_response: OpenaiChatCompletions =
+                                    serde_json::from_slice(&contents)?;
+                                chat_response.choices[0].message.content.clone()
+                            }
+                            &_ => {
+                                let chat_response: OpenaiChatCompletions =
+                                    serde_json::from_slice(&contents)?;
+                                chat_response.choices[0].message.content.clone()
+                            }
+                        }
                     }
                     _ => {
                         let contents = result.bytes().await?;

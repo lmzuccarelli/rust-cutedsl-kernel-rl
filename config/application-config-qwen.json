@@ -9,6 +9,7 @@
   "working_dir": "/home/lzuccarelli/Projects/rust-cutedsl-kernel-rl",
   "llm_agent": "Api",
   "llm_model": "qwen3-8-27b",
+  "response_type": "Opneai",
   "controller_mode": "Baseline",
   "token_file": "",
   "openapi_url": "https://localhost:8000/v1/chat/completions",

@@ -73,6 +73,10 @@ fn main() {
                     Some(ref openapi_url) => {
                         hm.insert("model".to_string(), parameters.llm_model.clone());
                         hm.insert("openapi_url".to_string(), openapi_url.to_owned());
+                        hm.insert(
+                            "response_type".to_string(),
+                            parameters.response_type.to_string(),
+                        );
                         match parameters.token_file {
                             Some(ref tf) => {
                                 let token_res = fs::read_to_string(tf);

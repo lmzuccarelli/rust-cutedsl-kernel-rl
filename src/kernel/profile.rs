@@ -55,6 +55,7 @@ impl ProfileInterface for Profile {
         }
         let cutedsl_env_path = get_item("cutedsl_env_path")?;
 
+        // use --set detailed rather than --set full
         for name in kernel_names.iter() {
             log::info!("[run] profiling kernel {}", name);
             let mut cmd = Command::new("sudo");
@@ -64,7 +65,7 @@ impl ProfileInterface for Profile {
                 .arg("--kernel-name")
                 .arg(format!("regex:{}", name))
                 .arg("--set")
-                .arg("full")
+                .arg("detailed")
                 .arg("-o")
                 .arg(format!("profile-{}", name))
                 .arg("-f")

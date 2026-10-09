@@ -10,6 +10,7 @@
   "cutedsl_env_path": "/home/lzuccarelli/Projects/cutlass/target_cute_env",
   "llm_agent": "Claude",
   "llm_model": "opus-5-5",
+  "response_type": "Opneai",
   "controller_mode": "Agent",
   "openapi_url": "https://api.enmaas.devshift.net/messages",
   "max_rollout": 10,

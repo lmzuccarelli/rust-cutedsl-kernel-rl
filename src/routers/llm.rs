@@ -92,7 +92,8 @@ async fn execute_agent(agent_type: LlmAgent, prompt: String) -> (StatusCode, Str
             let token = get_item("token").unwrap_or("".to_string());
             let url = get_item("openapi_url").unwrap_or("".to_string());
             let model = get_item("model").unwrap_or("".to_string());
-            let res = LlmOpenApi::run(prompt, url, token, model).await;
+            let response_type = get_item("response_type").unwrap_or("".to_string());
+            let res = LlmOpenApi::run(prompt, url, token, model, response_type).await;
             match res {
                 Ok(contents) => (StatusCode::OK, contents),
                 Err(e) => (
