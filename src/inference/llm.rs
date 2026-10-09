@@ -48,11 +48,11 @@ pub struct Message {
 #[serde(rename_all = "camelCase")]
 pub struct Usage {
     #[serde(rename = "prompt_tokens")]
-    pub prompt_tokens: i64,
+    pub prompt_tokens: Option<i64>,
     #[serde(rename = "completion_tokens")]
-    pub completion_tokens: i64,
+    pub completion_tokens: Option<i64>,
     #[serde(rename = "total_tokens")]
-    pub total_tokens: i64,
+    pub total_tokens: Option<i64>,
     #[serde(rename = "prompt_tokens_details")]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
     #[serde(rename = "completion_tokens_details")]

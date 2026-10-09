@@ -183,6 +183,7 @@ pub async fn execute(
     log::info!("server      : {}", command);
     log::info!("model       : {}", parameters.llm_model);
     log::info!("mode        : {:?}", parameters.controller_mode);
+    log::info!("agent       : {}", parameters.llm_agent);
 
     match command.as_str() {
         "init" => {
