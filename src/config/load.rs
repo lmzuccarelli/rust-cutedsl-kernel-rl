@@ -17,7 +17,7 @@ pub struct Parameters {
     pub controller_mode: ControllerMode,
     pub token_file: Option<String>,
     pub openapi_url: Option<String>,
-    pub response_type: ResponseType,
+    pub response_type: Option<ResponseType>,
     pub gpu_arch: u8,
     pub max_rollout: u8,
     pub rollout_start: u8,
