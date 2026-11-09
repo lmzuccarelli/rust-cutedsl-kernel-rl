@@ -1,21 +1,45 @@
+# Comprehensive GPU Optimization Strategy Database
+
+This database contains optimization strategies with their expected performance gains for different GPU performance states, derived from comprehensive profiling and optimization research.
+
+## Database Philosophy
+
+This database serves as a **living knowledge base** that:
+
+- Maps performance states to optimization strategies
+- Tracks actual vs predicted performance improvements
+- Learns from optimization results to improve future predictions
+- Provides comprehensive context for LLM-powered optimization
+- Unknown performance improvements are listed as 0%
+
+## Performance State Categories
+
+{performance_state_category}
+
 ## Usage Guidelines for LLM Integration
 
 ### For State Analysis
+
 When analyzing NCU reports, the LLM should:
+
 1. Identify primary and secondary bottlenecks
 2. Map to the closest state in this database
 3. Consider hardware context and kernel characteristics
 4. Account for potential state transitions after optimization
 
 ### For Optimization Selection
+
 When selecting optimizations, the LLM should:
+
 1. Prioritize high-confidence, high-impact optimizations
 2. Consider composite strategies for complex states
 3. Account for potential side effects and trade-offs
 4. Adapt parameters based on kernel-specific characteristics
 
 ### For Performance Prediction
+
 When predicting improvements, the LLM should:
+
 1. Use base predictions as starting points
 2. Adjust based on confidence scores and historical accuracy
 3. Consider kernel context and similarity to previous cases
@@ -24,6 +48,7 @@ When predicting improvements, the LLM should:
 ## Integration with Comprehensive GPU Optimization Knowledge
 
 This database integrates with the comprehensive GPU optimization decision tree to provide:
+
 - **Hierarchical optimization strategies**: From high-level decisions to specific implementations
 - **Context-aware recommendations**: Based on profiling data and performance characteristics
 - **Multi-objective optimization**: Balancing performance, accuracy, and maintainability
@@ -31,17 +56,17 @@ This database integrates with the comprehensive GPU optimization decision tree t
 
 The LLM agents use this database as a **living reference** that evolves based on actual optimization results, enabling continuous improvement in optimization strategy selection and performance prediction.
 
-**IMPORTANT**
+### Important
 
-When targeting kernels for the NVIDIA GB10 (sm_121) on the DGX Spark workstation. Take note of the following
+When targeting kernels for the NVIDIA GB10 (sm_121). Take note of the following
 
 CRITICAL HARDWARE CONSTRAINTS:
+
 1. Target architecture is compute capability 12.1 (sm_121). Do NOT generate sm_100 or sm_90 code.
-2. The hardware DOES NOT support tcgen05, TMEM, WGMMA, or multicast TMA. 
+2. The hardware DOES NOT support tcgen05, TMEM, WGMMA, or multicast TMA.
 3. Fall back to standard SM80/SM90 cooperative layouts using mma.sync warp-level instructions mapped onto Blackwell's core tensor structures.
 4. Hard-cap all Shared Memory (Smem) allocation layouts to remain under 99 KB per thread block to prevent allocation failure.
 5. Maximize utilization of the native NVFP4/FP8 tensor pipeline, utilizing custom swizzling math to mitigate the tight 273 GB/s LPDDR5X memory bandwidth bottleneck.
-
 
 ### Learned Optimization Strategies
 
@@ -63,10 +88,10 @@ directly. Tensor-core MMA is expressed declaratively:
 4. Run the K-reduction with `cute.gemm(tiled_mma, acc, rA, rB, acc)`, which lowers
    straight to the tensor-core MMA instruction.
 5. If you use the from_dlpack library ensure its set correctly to the  cute.runtime i.e 'cute.runtime.from_dlpack(A)'
-6. Ensure peoper use of 2D blocks,  launch from block = (THREADS, 1, 1) to a 2D block block = (BN, BM, 1) so that tx ∈ [0, BN) and ty ∈ [0, BM) as the kernel assumes. This is valid because BN * BM == THREADS (32*32 == 1024). Keep the grid as (M // BM, N // BN, 1).
+6. Ensure peoper use of 2D blocks,  launch from block = (THREADS, 1, 1) to a 2D block block = (BN, BM, 1) so that tx ∈ [0, BN) and ty ∈ [0, BM) as the kernel assumes. This is valid because BN *BM == THREADS (32*32 == 1024). Keep the grid as (M // BM, N // BN, 1).
    Constraints / verification:
    - Do not change the kernel's indexing logic or the XOR swizzle — only make the launch geometry match the kernel's assumptions.
-   - The kernel assumes BM * BN == THREADS; if you want it more robust, add an assertion or derive the 2D block from that relationship, but the minimal correct change is the block = (BN, BM, 1) launch.he block launch from block = (THREADS, 1, 1) to a 2D block block = (BN, BM, 1) so that tx ∈ [0, BN) and ty ∈ [0, BM) as the kernel assumes. This is valid because BN * BM == THREADS (32*32 == 1024). Keep the grid as (M // BM, N // BN, 1).
+   - The kernel assumes BM *BN == THREADS; if you want it more robust, add an assertion or derive the 2D block from that relationship, but the minimal correct change is the block = (BN, BM, 1) launch.he block launch from block = (THREADS, 1, 1) to a 2D block block = (BN, BM, 1) so that tx ∈ [0, BN) and ty ∈ [0, BM) as the kernel assumes. This is valid because BN* BM == THREADS (32*32 == 1024). Keep the grid as (M // BM, N // BN, 1).
 
 Compared to the CUDA version this removes all manual `lda`/`ldb` pointer math, the
 `__syncwarp()` producer/consumer dance, and the hand-written zero-padding pack loop:
@@ -83,8 +108,11 @@ CuTe layouts carry the strides, and tails are handled by **predicated copies**
 # C is (M,N) fp32. Tails (partial M/N/K) are handled with predicated copies rather
 # than the CUDA-style zero-pad packing.
 import os
+
 # GB10 (sm_121) is binary-compatible with the sm_120 family; the 4.8.0 DSL tops
 # out at sm_120. Must be set before importing cutlass (arch resolved at import).
+
+# N.B. If GB10 is the target gpu then add this line
 os.environ.setdefault("CUTE_EXPERIMENTAL_DSL_ARCH", "sm_120a")
 
 import torch
@@ -162,6 +190,7 @@ def tc_gemm(mA, mB, mC, BM: cutlass.Constexpr[int],
 ```
 
 **Notes / pitfalls (CuTe DSL):**
+
 - **Layouts replace pointer math.** `cute.local_tile` derives operand tiles with
   correct strides from the tensor's own layout — there is no `lda`/`ldb` to get wrong,
   and no "is B column-major?" trap.
@@ -170,22 +199,24 @@ def tc_gemm(mA, mB, mC, BM: cutlass.Constexpr[int],
   zero-pad-into-scratch-SMEM approach.
 - **Synchronization.** Use `prims.barrier_cta_sync(0)` around the SMEM
   producer/consumer steps (the CuTe/project equivalent of `__syncwarp()`/`__syncthreads()`).
-- **Architecture.** Tensor cores require sm_70+; this project targets the sm_120
-  (Blackwell/GB10) family via `CUTE_EXPERIMENTAL_DSL_ARCH=sm_120a`.
+- **Architecture.** Tensor cores require sm_70+; for Blackwell/GB10 use sm_120 setting  `CUTE_EXPERIMENTAL_DSL_ARCH=sm_120a`.
 - The MMA atom / TiledMMA construction above is illustrative — pick the atom that
   matches your target arch and operand dtypes.
 
 #### Expert Technique: shared_memory_tiling
+
 **Performance Impact**: 0% improvement
 **Confidence Score**: 0.98
 **Applicable States**: compute_throughput_saturated, memory_compute_balanced, memory_bandwidth_saturated
 
 **Implementation Hints**:
+
 - Optimal tile size: 16
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
 
 **Usage Examples** (CuTe DSL, `cutlass.cute` 4.8.0+):
+
 ```python
 # Shared-memory staging tiles: CUDA `__shared__ float As[TS][TS]` becomes a
 # CuTe DSL SMEM-space array declared inside the kernel.
@@ -206,15 +237,18 @@ matmul_kernel(mA, mB, mC, TS).launch(
 ```
 
 #### Expert Technique: register_optimization
+
 **Performance Impact**: 0% improvement
 **Confidence Score**: 0.80
 **Applicable States**: compute_throughput_saturated, memory_compute_balanced, memory_bandwidth_saturated
 
 **Implementation Hints**:
+
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
 
 **Usage Examples** (CuTe DSL, `cutlass.cute` 4.8.0+):
+
 ```python
 # Register optimization: keep the accumulator in a register across the whole
 # K-loop so there is no SMEM/GMEM round-trip per step. In CuTe DSL a plain
@@ -239,16 +273,19 @@ tensor_matmul_kernel(mA, mB, mC, TS).launch(grid=blocks, block=threads)
 ```
 
 #### Expert Technique: memory_coalescing
+
 **Performance Impact**: 0% improvement
 **Confidence Score**: 0.83
 **Applicable States**: compute_throughput_saturated, memory_compute_balanced, memory_bandwidth_saturated
 
 **Implementation Hints**:
+
 - Optimal tile size: 16
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
 
 **Usage Examples** (CuTe DSL, `cutlass.cute` 4.8.0+):
+
 ```python
 # Memory coalescing: make the fastest-varying thread index (tx) index the
 # stride-1 (contiguous) mode of the tensor so a warp reads a contiguous span.
@@ -269,15 +306,18 @@ matmul_kernel(mA, mB, mC, M, K, N).launch(grid=grid, block=block)
 ```
 
 #### Expert Technique: occupancy_tuning
+
 **Performance Impact**: 0% improvement
 **Confidence Score**: 0.85
 **Applicable States**: compute_throughput_saturated, memory_compute_balanced, memory_bandwidth_saturated
 
 **Implementation Hints**:
+
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
 
 **Usage Examples** (CuTe DSL, `cutlass.cute` 4.8.0+):
+
 ```python
 # Occupancy tuning: occupancy is driven by the CTA (block) size and the SMEM
 # footprint chosen on the host. Tune `block_size` (and the SMEM tile shapes,
@@ -297,14 +337,17 @@ square_sum_kernel(mIn, mOut, n).launch(grid=grid, block=(block_size, 1, 1))
 ```
 
 #### Expert Technique: dynamic_shared_memory
+
 **Performance Impact**: 0% improvement
 **Confidence Score**: 0.44
 **Applicable States**: memory_compute_balanced, low_occupancy_register_pressure, memory_latency_bound
 
 **Implementation Hints**:
+
 - Consistently achieves high performance gains
 
 **Usage Examples** (CuTe DSL, `cutlass.cute` 4.8.0+):
+
 ```python
 # Dynamic shared memory: CUDA sizes `extern __shared__` at *launch* time via the
 # third <<<...>>> argument. In CuTe DSL the SMEM size is a JIT compile-time
@@ -337,23 +380,24 @@ softmax_kernel_batch(mIn, mOut, batch_size, dim, threads).launch(
 )
 ```
 
-
 ### Expert Technique Combinations
 
 **Combination**: register_optimization + shared_memory_tiling
+
 - Average Performance: 0% speedup
 - Confidence: 0.60
 - Frequency in top solutions: 3 times
 
-
 ## Expert-Learned Optimizations (Auto-Generated)
 
-### Expert Technique: shared_memory_tiling
+### Auto-Generated Technique: shared_memory_tiling
+
 **Source**: KernelBench Leaderboard Analysis
 **Performance Impact**: 0% improvement
 **Confidence**: 0.98
 
 **Implementation Strategy**:
+
 - Optimal tile size: 16
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
@@ -361,26 +405,28 @@ softmax_kernel_batch(mIn, mOut, batch_size, dim, threads).launch(
 **Usage Context**:
 Best applied to: memory_bandwidth_saturated, memory_compute_balanced, compute_throughput_saturated
 
+### Auto-Generated Technique: register_optimization
 
-### Expert Technique: register_optimization
 **Source**: KernelBench Leaderboard Analysis
 **Performance Impact**: 0% improvement
 **Confidence**: 1.00
 
 **Implementation Strategy**:
+
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
 
 **Usage Context**:
 Best applied to: memory_bandwidth_saturated, memory_compute_balanced, compute_throughput_saturated
 
+### Auto-Generated Technique: memory_coalescing
 
-### Expert Technique: memory_coalescing
 **Source**: KernelBench Leaderboard Analysis
 **Performance Impact**: 0% improvement
 **Confidence**: 0.83
 
 **Implementation Strategy**:
+
 - Optimal tile size: 16
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
@@ -388,28 +434,29 @@ Best applied to: memory_bandwidth_saturated, memory_compute_balanced, compute_th
 **Usage Context**:
 Best applied to: memory_bandwidth_saturated, memory_compute_balanced, compute_throughput_saturated
 
+### Auto-Generated Technique: occupancy_tuning
 
-### Expert Technique: occupancy_tuning
 **Source**: KernelBench Leaderboard Analysis
 **Performance Impact**: 0% improvement
 **Confidence**: 0.85
 
 **Implementation Strategy**:
+
 - Highly effective for matrix multiplication workloads
 - Consistently achieves high performance gains
 
 **Usage Context**:
 Best applied to: memory_bandwidth_saturated, memory_compute_balanced, compute_throughput_saturated
 
+### Auto-Generated Technique: dynamic_shared_memory
 
-### Expert Technique: dynamic_shared_memory
 **Source**: KernelBench Leaderboard Analysis
 **Performance Impact**: 0% improvement
 **Confidence**: 0.44
 
 **Implementation Strategy**:
+
 - Consistently achieves high performance gains
 
 **Usage Context**:
 Best applied to: memory_latency_bound, memory_compute_balanced, low_occupancy_register_pressure
-

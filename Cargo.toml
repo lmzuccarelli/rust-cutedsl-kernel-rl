@@ -1,8 +1,20 @@
 [package]
 name = "rust-cutedsl-kernel-rl"
-version = "0.5.34"
+version = "0.6.1"
 edition = "2024"
 authors = ["Luigi Mario Zuccarelli<>luigizuccarelli@gmail.com"]
+
+[lib]
+name = "kernel_cutedsl_agent"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kernel-prompt-generator"
+path = "src/bin/generate_prompts.rs"
+
+[[bin]]
+name = "kernel-cutedsl-agent-service"
+path = "src/bin/server.rs"
 
 [dependencies]
 serde_derive = "1.0.219"

@@ -1,7 +1,6 @@
 use crate::config::load::Parameters;
-use crate::inference::prompts::{
-    get_available_optimizations, get_combined, get_optimization_plan,
-    get_performance_state_category, get_profile_prompt, get_state_match_prompt,
+use crate::inference::generated_prompts::{
+    get_optimization_plan, get_performance_state_category, get_state_prompt,
     get_task_generate_code_prompt,
 };
 use crate::kernel::profile::{Profile, ProfileInterface};
@@ -86,7 +85,6 @@ impl ControllerInterface for Controller {
             let mut elapsed_cycles = 0_i64;
             let mut ncu_report = String::new();
             let mut state = String::new();
-            let mut match_state = String::new();
             let mut json_plan = String::new();
 
             log::debug!("[execute_baseline_flow] kernel_name {}", kernel_file);
@@ -101,10 +99,6 @@ impl ControllerInterface for Controller {
                 ncu_report
             );
             log::trace!("[execute_baseline_flow] initial state          {}", state);
-            log::trace!(
-                "[execute_baseline_flow] initial match_state          {}",
-                match_state
-            );
             log::trace!(
                 "[execute_baseline_flow] initial json_plan      {}",
                 json_plan
@@ -183,7 +177,7 @@ impl ControllerInterface for Controller {
                     "[execute_baseline_flow] baseline calling llm endpoint (current state profile)"
                 );
                 // set the initial prompt for the llm
-                let prompt = get_profile_prompt(code.clone(), ncu_report.clone()).replace("\n", "");
+                let prompt = get_state_prompt(code.clone(), ncu_report.clone()).replace("\n", "");
                 // call the llm endpoint
                 let url = format!(
                     "{}/v1/prompt/{}",
@@ -201,6 +195,7 @@ impl ControllerInterface for Controller {
                 }
             }
 
+            /*
             if x & 16u8 == 16 {
                 log::info!("[execute_baseline_flow] baseline calling llm endpoint (match state)");
                 // set the initial prompt for the llm
@@ -222,19 +217,15 @@ impl ControllerInterface for Controller {
                     ))?;
                 }
             }
+            */
 
             if x & 32u8 == 32 {
                 log::info!(
                     "[execute_baseline_flow] baseline calling llm endpoint (optimization plan)"
                 );
                 // get the top_n matching optimizations in json format from the llm
-                let avail_opt = get_available_optimizations();
-                let prompt_op = get_optimization_plan(
-                    parameters.max_rollout,
-                    state.clone(),
-                    code.clone(),
-                    avail_opt,
-                );
+                let prompt_op =
+                    get_optimization_plan(parameters.max_rollout, state.clone(), code.clone());
                 // call the llm endpoint
                 let url = format!(
                     "{}/v1/prompt/{}",
@@ -286,15 +277,12 @@ impl ControllerInterface for Controller {
                     log::trace!("[execute_baseline_flow] ncu report {}", ncu_report);
                     log::trace!("[execute_baseline_flow] code {}", code);
 
-                    let combined = get_combined(state_category.clone())?;
-
                     let task_prompt = get_task_generate_code_prompt(
                         plan.technique.to_owned(),
                         category.to_owned(),
                         plan.description.to_owned(),
                         ncu_report.to_owned(),
                         code.to_owned(),
-                        combined,
                     );
 
                     fs::write(
@@ -665,7 +653,7 @@ impl ControllerInterface for Controller {
                         // if previous step fails it will use the baseline ncu_report
                         log::info!("[execute_agent_flow] calling llm (state)");
                         let state_prompt =
-                            get_profile_prompt(code.clone(), ncu_report.clone()).replace("\n", "");
+                            get_state_prompt(code.clone(), ncu_report.clone()).replace("\n", "");
                         // call the llm endpoint
                         let url = format!(
                             "{}/v1/prompt/{}",
@@ -695,13 +683,8 @@ impl ControllerInterface for Controller {
                         thread::sleep(Duration::from_secs(5));
 
                         // get the top_n matching optimizations in json format from the llm
-                        let avail_opt = get_available_optimizations();
-                        let prompt_op = get_optimization_plan(
-                            plan_count,
-                            state.clone(),
-                            code.clone(),
-                            avail_opt,
-                        );
+                        let prompt_op =
+                            get_optimization_plan(plan_count, state.clone(), code.clone());
                         // call llm for optimization plan
                         log::info!("[execute_agent_flow] calling llm (optimization plan)");
                         let url = format!(
@@ -787,16 +770,12 @@ impl ControllerInterface for Controller {
                             vec_error_techniques
                         );
 
-                        let state_category = get_performance_state_category();
-                        // if file read files this should break the loop
-                        let combined = get_combined(state_category)?;
                         let task_prompt = get_task_generate_code_prompt(
                             plan.technique.clone(),
                             category.to_owned(),
                             plan.description,
                             ncu_report.to_owned(),
                             code.to_owned(),
-                            combined,
                         );
 
                         let wr_res = fs::write(

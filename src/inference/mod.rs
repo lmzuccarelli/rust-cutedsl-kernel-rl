@@ -1,2 +1,2 @@
+pub mod generated_prompts;
 pub mod llm;
-pub mod prompts;

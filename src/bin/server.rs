@@ -18,12 +18,19 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use tokio::net::TcpListener;
 
+#[path = "../cli/mod.rs"]
 mod cli;
+#[path = "../config/mod.rs"]
 mod config;
+#[path = "../inference/mod.rs"]
 mod inference;
+#[path = "../kernel/mod.rs"]
 mod kernel;
+#[path = "../routers/mod.rs"]
 mod routers;
+#[path = "../utils/mod.rs"]
 mod utils;
+#[path = "../workflow/mod.rs"]
 mod workflow;
 
 #[global_allocator]
