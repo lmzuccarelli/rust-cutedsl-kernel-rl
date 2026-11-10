@@ -652,7 +652,7 @@ class DenseGemmKernel:
 
         self.shared_storage = SharedStorage
 
-        self.kernel(
+        self.dense_gemm_kernel(
             tma_atom_a,
             tma_tensor_a,
             a,
@@ -1016,7 +1016,7 @@ class DenseGemmKernel:
 
     # GPU device kernel
     @cute.kernel
-    def kernel(
+    def dense_gemm_kernel(
         self,
         tma_atom_a: cute.CopyAtom,
         mA_mkl: cute.Tensor,
@@ -3120,4 +3120,166 @@ def _select_default_dense_gemm_plan(
 
 # Alias for FlashInfer integration
 Sm120B12xBlockScaledDenseGemmKernel = DenseGemmKernel
-(.venv) redhat-et@dgx-spark-4:~/lkesem/vllm$ 
+
+
+# ---------------------------------------------------------------------------
+# Standalone execution + profiling harness
+# ---------------------------------------------------------------------------
+# Makes this file directly runnable so the RL harness can drive THIS kernel:
+#   * src/kernel/execute.rs runs `python cuteDSL_gemm.py` and treats a non-zero
+#     exit (or the word "failed" in stdout) as failure.
+#   * src/kernel/profile.rs greps for the cute-kernel decorator + `def <name>`
+#     `ncu --kernel-name regex:<name> ... python3 cuteDSL_gemm.py`, so the file
+#     must actually launch the kernel when executed.
+# The launch path mirrors flashinfer's B12xFp4GemmRunner.forward but constructs
+# the LOCAL DenseGemmKernel (so profiling reflects edits to this file).
+# Validation mirrors correctness_test_cuteDSL.py: quantize -> torch.mm reference
+# -> cosine similarity.
+def _run_harness() -> int:
+    import os
+    import sys
+
+    # The RL harness may invoke `python`/`python3` without activating the venv,
+    # so prepend this interpreter's bin dir (where flashinfer's JIT `ninja` lives)
+    # and CUDA's bin (nvcc) to PATH; otherwise the first-use JIT build fails with
+    # "No such file or directory: 'ninja'".
+    _extra_paths = [os.path.dirname(sys.executable), "/usr/local/cuda/bin"]
+    os.environ["PATH"] = os.pathsep.join(
+        _extra_paths + [os.environ.get("PATH", "")]
+    )
+
+    import torch
+    import torch.nn.functional as F
+    from flashinfer import SfLayout, nvfp4_quantize
+    from flashinfer.cute_dsl.utils import torch_to_cutlass_dtype
+    from flashinfer.gemm.gemm_base import (
+        _compile_block_scaled_gemm,
+        _prepare_alpha_for_launch,
+    )
+    from flashinfer.utils import get_device_sm_count
+
+    def _fail(msg: str) -> int:
+        print(f"FAILED: {msg}")
+        return 1
+
+    if not torch.cuda.is_available():
+        return _fail("CUDA device not available")
+
+    torch.manual_seed(0)
+    device = torch.device("cuda")
+
+    # Single representative NVFP4 shape (m, n, k); n % 8 == 0, k % 32 == 0.
+    m, n, k = 48, 512, 128
+    out_dtype = torch.bfloat16
+    sf_vec_size = 16  # NVFP4
+    enable_pdl = True
+
+    # --- Inputs (same construction as correctness_test_cuteDSL.py) ---
+    a = torch.randn([m, k], device=device, dtype=torch.bfloat16)
+    b = torch.randn([n, k], device=device, dtype=torch.bfloat16)
+    g_in = (448 * 6) / a.float().abs().nan_to_num().max()
+    g_w = (448 * 6) / b.float().abs().nan_to_num().max()
+    a_fp4, a_sf = nvfp4_quantize(
+        a, g_in, sfLayout=SfLayout.layout_128x4, do_shuffle=False
+    )
+    b_fp4, b_sf = nvfp4_quantize(
+        b, g_w, sfLayout=SfLayout.layout_128x4, do_shuffle=False
+    )
+    alpha = torch.tensor([1.0 / (g_in * g_w)], device=device, dtype=torch.float32)
+
+    reference = torch.mm(a, b.T)
+    out = torch.empty([m, n], device=device, dtype=out_dtype)
+
+    # --- Launch the LOCAL kernel (mirrors B12xFp4GemmRunner.forward) ---
+    # mm_fp4 passes a=input_fp4, b=mat2_fp4.T, a_descale=inv_s, b_descale=inv_s.T
+    kernel_a = a_fp4  # (m, k_packed)
+    kernel_b = b_fp4  # (n, k_packed)  == (b_fp4.T).T
+    kernel_a_sf = a_sf
+    kernel_b_sf = b_sf
+
+    k_packed = kernel_a.shape[1]
+    real_k = k_packed * 2
+    sm_count = get_device_sm_count(device)
+
+    plan = _select_default_dense_gemm_plan(m, n, real_k, sm_count, expected_m=m)
+    mma_tiler_mn = plan.mma_tiler_mn
+    swap_ab = plan.swap_ab
+    cluster_shape_mn = (1, 1)
+    use_prefetch = False
+
+    sf_dtype = cutlass.Float8E4M3FN  # NVFP4
+    c_cutlass_dtype = torch_to_cutlass_dtype(out_dtype)
+
+    sf_m = (m + 127) // 128
+    sf_n = (n + 127) // 128
+    sf_k = (real_k // sf_vec_size + 3) // 4
+
+    cache: dict = {}
+    cache_key = (
+        sf_vec_size,
+        mma_tiler_mn,
+        cluster_shape_mn,
+        swap_ab,
+        use_prefetch,
+        "sm120",
+        None,
+        enable_pdl,
+        out_dtype,
+    )
+
+    make_kernel = lambda: Sm120B12xBlockScaledDenseGemmKernel(
+        sf_vec_size,
+        mma_tiler_mn,
+        cluster_shape_mn,
+        use_prefetch=use_prefetch,
+        enable_pdl=enable_pdl,
+        swap_ab=swap_ab,
+    )
+
+    try:
+        compiled_gemm, _ = _compile_block_scaled_gemm(
+            cache,
+            cache_key,
+            make_kernel,
+            ab_cutlass_dtype=cutlass.Uint8,
+            sf_dtype=sf_dtype,
+            c_cutlass_dtype=c_cutlass_dtype,
+            ab_assumed_align=32,
+            cluster_shape_mn=cluster_shape_mn,
+            swap_ab=False,
+            sf_m=sf_m,
+            sf_n=sf_n,
+            sf_k=sf_k,
+            batch_size=1,
+        )
+        alpha_for_launch = _prepare_alpha_for_launch(alpha, device)
+        compiled_gemm(
+            kernel_a,
+            kernel_b,
+            out,
+            sf_m,
+            sf_n,
+            sf_k,
+            kernel_a_sf.data_ptr(),
+            kernel_b_sf.data_ptr(),
+            alpha_for_launch,
+        )
+        torch.cuda.synchronize()
+    except Exception as e:  # noqa: BLE001 - report any launch/compile failure
+        return _fail(f"kernel launch/compile error: {e}")
+
+    # --- Validate (mirrors correctness_test_cuteDSL.py) ---
+    cos_sim = F.cosine_similarity(
+        reference.float().reshape(-1), out.float().reshape(-1), dim=0
+    ).item()
+    print(f"shape=(m={m}, n={n}, k={k}) cosine_similarity={cos_sim:.5f}")
+    if cos_sim > 0.97:
+        print("PASS")
+        return 0
+    return _fail(f"cosine_similarity {cos_sim:.5f} <= 0.97")
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(_run_harness())

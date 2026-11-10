@@ -1,4 +1,5 @@
 use serde_derive::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::str::FromStr;
@@ -10,6 +11,11 @@ pub struct Parameters {
     pub gpu_server_url: String,
     pub llm_server_url: String,
     pub workflow_batch: Vec<String>,
+    // Maps a workflow_batch kernel path to the single `@cute.kernel` function
+    // name that should be profiled for it. Without an entry the profiler falls
+    // back to profiling every annotated kernel it can find in the file (noisy).
+    #[serde(default)]
+    pub kernel_names: HashMap<String, String>,
     pub working_dir: String,
     pub llm_model: String,
     pub llm_agent: LlmAgent,

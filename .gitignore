@@ -6,3 +6,12 @@
 /staging
 replay-buffer.tar.gz
 /replay-buffer
+
+# Python bytecode caches (all directories/sub-directories)
+__pycache__/
+*.py[cod]
+
+# ncu profiling artifacts (all directories/sub-directories)
+*.profile
+*.ncu-rep
+*.ncu-repz

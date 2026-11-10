@@ -157,6 +157,19 @@ fn main() {
                 parameters.cutedsl_env_path.clone(),
             );
 
+            // insert the configured kernel-name-to-profile for each workflow
+            // batch kernel. Keyed by the workflow name stem (basename without
+            // the .py extension) which matches WorkItem.name seen by profile.rs,
+            // so it stays stable across RL kernel variants.
+            for (kernel_path, kernel_name) in parameters.kernel_names.iter() {
+                let stem = kernel_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(kernel_path.as_str())
+                    .replace(".py", "");
+                hm.insert(format!("kernel_name:{}", stem), kernel_name.clone());
+            }
+
             let gpu_arch_res = ShellExecute::run("nvidia-smi", vec!["--query-gpu=compute_cap"]);
             // preserve output
             println!("{}", gpu_arch_res.unwrap_or("no arch".to_string()));

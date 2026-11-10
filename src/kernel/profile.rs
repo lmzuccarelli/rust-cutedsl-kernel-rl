@@ -28,6 +28,10 @@ impl ProfileInterface for Profile {
         // restore working dir
         env::set_current_dir(&work_item.working_dir)?;
 
+        // stable identifier for this workflow batch kernel (basename without the
+        // .py extension); used to look up the configured kernel name to profile.
+        let work_item_name = work_item.name.clone();
+
         // get the kernel name
         let kernel_file = match work_item.kernel_file {
             Some(name) => name,
@@ -42,8 +46,28 @@ impl ProfileInterface for Profile {
         env::set_current_dir(work_item.target_dir)?;
 
         let kernel = fs::read_to_string(&kernel_file)?;
-        // handle multiple kernel names
-        let kernel_names = extract_kernel_name(kernel)?;
+        // Prefer the kernel name configured for this workflow batch kernel
+        // (config `kernel_names`), which restricts profiling to the single
+        // kernel being optimized and avoids ncu noise from every other
+        // @cute.kernel in the file. Fall back to extracting all annotated
+        // kernels when no name is configured.
+        let kernel_names = match get_item(&format!("kernel_name:{}", work_item_name)) {
+            Ok(configured) => {
+                log::info!(
+                    "[run] (profileinterface) using configured kernel name {} for {}",
+                    configured,
+                    work_item_name
+                );
+                vec![configured]
+            }
+            Err(_) => {
+                log::debug!(
+                    "[run] (profileinterface) no configured kernel name for {}, extracting all annotated kernels",
+                    work_item_name
+                );
+                extract_kernel_name(kernel)?
+            }
+        };
         log::debug!(
             "[run] (profileinterface) profile kernel_names {:#?}",
             kernel_names
