@@ -1,19 +1,14 @@
-use crate::config::load::LlmAgent;
-use crate::inference::llm::{
-    LlmClaude, LlmInterface, LlmInterfaceOpenApi, LlmOpenApi, LlmOpenCode, LlmTokenConfig,
-};
+use crate::inference::llm::{LlmInterfaceOpenApi, LlmOpenApi, LlmTokenConfig};
 use crate::utils::common::get_item;
 use custom_logger as log;
 use http::{Method, Request, Response, StatusCode};
 use http_body_util::BodyExt;
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
-use std::str::FromStr;
 
 pub async fn endpoints(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let mut response = Response::new(Full::default());
     let parameters = req.uri().path().split("/").collect::<Vec<&str>>();
-    let agent_type = get_agent(parameters.clone());
     log::debug!("[endpoints] llm request {:?}", parameters);
     match *req.method() {
         Method::POST => {
@@ -21,7 +16,7 @@ pub async fn endpoints(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, 
             let prompt_res = String::from_utf8(data.to_vec());
             match prompt_res {
                 Ok(prompt) => {
-                    let (status, result) = execute_agent(agent_type, prompt).await;
+                    let (status, result) = execute_agent(prompt).await;
                     match status {
                         StatusCode::OK => {
                             *response.body_mut() = Full::from(result);
@@ -65,62 +60,33 @@ pub async fn endpoints(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, 
 
 // execute the agent depending on type
 // handle the error with StatusCode
-async fn execute_agent(agent_type: LlmAgent, prompt: String) -> (StatusCode, String) {
-    log::debug!("[execute_agent] agent type {:?}", agent_type);
-    let (status, result) = match agent_type {
-        LlmAgent::Claude => {
-            let res = LlmClaude::run(prompt).await;
-            match res {
-                Ok(contents) => (StatusCode::OK, contents),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("[execute_agent] claude execution failed {}", e),
-                ),
-            }
-        }
-        LlmAgent::Opencode => {
-            let res = LlmOpenCode::run(prompt).await;
-            match res {
-                Ok(contents) => (StatusCode::OK, contents),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("[execute_agent] opencode execution failed {}", e),
-                ),
-            }
-        }
-        LlmAgent::Api => {
-            let token = get_item("token").unwrap_or("".to_string());
-            let url = get_item("openapi_url").unwrap_or("".to_string());
-            let model = get_item("model").unwrap_or("".to_string());
-            let response_type = get_item("response_type").unwrap_or("".to_string());
-            let token_config = LlmTokenConfig {
-                max_output_tokens: get_item("llm_max_output_tokens")
-                    .ok()
-                    .and_then(|v| v.parse::<i32>().ok())
-                    .unwrap_or(64_000),
-                context_window: get_item("llm_context_window")
-                    .ok()
-                    .and_then(|v| v.parse::<i32>().ok())
-                    .unwrap_or(200_000),
-                input_token_margin: get_item("llm_input_token_margin")
-                    .ok()
-                    .and_then(|v| v.parse::<i32>().ok())
-                    .unwrap_or(2_000),
-                beta_header: get_item("llm_beta_header").ok(),
-            };
-            let res = LlmOpenApi::run(prompt, url, token, model, response_type, token_config).await;
-            match res {
-                Ok(contents) => (StatusCode::OK, contents),
-                Err(e) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("[execute_agent] openapi execution failed {}", e),
-                ),
-            }
-        }
+async fn execute_agent(prompt: String) -> (StatusCode, String) {
+    let token = get_item("token").unwrap_or("".to_string());
+    let url = get_item("openapi_url").unwrap_or("".to_string());
+    let model = get_item("model").unwrap_or("".to_string());
+    let response_type = get_item("response_type").unwrap_or("".to_string());
+    let token_config = LlmTokenConfig {
+        max_output_tokens: get_item("llm_max_output_tokens")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(64_000),
+        context_window: get_item("llm_context_window")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(200_000),
+        input_token_margin: get_item("llm_input_token_margin")
+            .ok()
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(2_000),
+        beta_header: get_item("llm_beta_header").ok(),
+    };
+    let res = LlmOpenApi::run(prompt, url, token, model, response_type, token_config).await;
+    let (status, result) = match res {
+        Ok(contents) => (StatusCode::OK, contents),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("[execute_agent] openapi execution failed {}", e),
+        ),
     };
     (status, result)
-}
-
-fn get_agent(params: Vec<&str>) -> LlmAgent {
-    LlmAgent::from_str(params.last().unwrap_or(&"none")).unwrap_or(LlmAgent::Api)
 }

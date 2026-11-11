@@ -5,7 +5,6 @@ use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
 use std::error::Error as StdError;
-use std::process::Command;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -145,11 +144,7 @@ pub struct RequestMessage {
     pub content: String,
 }
 
-pub trait LlmInterface {
-    async fn run(prompt: String) -> Result<String, Box<dyn std::error::Error>>;
-}
-
-/// Token budget for an OpenAPI/Anthropic-compatible endpoint.
+/// Token budget for an OpenAPI compatible endpoint.
 ///
 /// `max_output_tokens` is only an upper bound: the value actually sent is also
 /// capped by the room left in the context window after the prompt is accounted
@@ -186,6 +181,11 @@ const MAX_MAX_TOKENS_RETRIES: u8 = 2;
 const MAX_TRANSPORT_RETRIES: u8 = 2;
 // Exponential backoff base: attempt 1 waits 2s, attempt 2 waits 4s.
 const TRANSPORT_RETRY_BASE_DELAY_SECS: u64 = 2;
+// Streaming keeps bytes (deltas and pings) flowing, so a long silence means the
+// connection is dead. A full 128k-token generation can exceed 20 minutes, so
+// the overall cap is generous; the idle read timeout catches stalls early.
+const STREAM_READ_TIMEOUT_SECS: u64 = 300;
+const REQUEST_TOTAL_TIMEOUT_SECS: u64 = 3600;
 
 // Measured ratio for large kernel + NCU payloads is ~2.6 chars/token (a
 // 179k-char prompt was counted as ~69k input tokens by the endpoint). The old
@@ -229,6 +229,114 @@ fn describe_reqwest_error(err: &reqwest::Error) -> String {
     message
 }
 
+/// Incremental parser for Messages API server-sent-event stream.
+///
+/// Only `text_delta` content is collected, so thinking blocks (always present
+/// on Opus 5.5) are skipped naturally. Bytes are fed as they arrive; partial
+/// events are buffered until their terminating blank line is seen.
+#[derive(Default, Debug)]
+struct StreamAccumulator {
+    // Raw bytes, not a String: a network chunk can end in the middle of a
+    // multi-byte UTF-8 character, so decoding only happens per complete event.
+    buffer: Vec<u8>,
+    text: String,
+    stop_reason: Option<String>,
+    output_tokens: Option<i64>,
+    done: bool,
+}
+
+impl StreamAccumulator {
+    /// Feed a raw chunk. Returns `Err` with the API's message when the stream
+    /// carries an `error` event (e.g. `overloaded_error` mid-generation).
+    fn feed(&mut self, chunk: &[u8]) -> Result<(), String> {
+        // CR only ever appears as part of CRLF line endings (JSON escapes it in
+        // payloads), so dropping it normalises CRLF streams to LF.
+        self.buffer.extend(chunk.iter().filter(|&&b| b != b'\r'));
+        while let Some(pos) = self.buffer.windows(2).position(|w| w == b"\n\n") {
+            let event: Vec<u8> = self.buffer.drain(..pos + 2).collect();
+            self.handle_event(&String::from_utf8_lossy(&event))?;
+        }
+        Ok(())
+    }
+
+    fn handle_event(&mut self, event: &str) -> Result<(), String> {
+        let data: String = event
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim_start)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if data.is_empty() {
+            return Ok(());
+        }
+        let value: Value = match serde_json::from_str(&data) {
+            Ok(value) => value,
+            Err(e) => {
+                log::warn!("[run] skipping unparsable stream event ({}): {}", e, data);
+                return Ok(());
+            }
+        };
+        match value["type"].as_str().unwrap_or_default() {
+            "content_block_start" => {
+                let block = &value["content_block"];
+                if block["type"] == "text"
+                    && let Some(text) = block["text"].as_str()
+                {
+                    self.text.push_str(text);
+                }
+            }
+            "content_block_delta" => {
+                let delta = &value["delta"];
+                if delta["type"] == "text_delta"
+                    && let Some(text) = delta["text"].as_str()
+                {
+                    self.text.push_str(text);
+                }
+            }
+            "message_delta" => {
+                if let Some(reason) = value["delta"]["stop_reason"].as_str() {
+                    self.stop_reason = Some(reason.to_string());
+                }
+                if let Some(tokens) = value["usage"]["output_tokens"].as_i64() {
+                    self.output_tokens = Some(tokens);
+                }
+            }
+            "message_stop" => self.done = true,
+            "error" => {
+                return Err(format!(
+                    "{}: {}",
+                    value["error"]["type"].as_str().unwrap_or("error"),
+                    value["error"]["message"].as_str().unwrap_or(&data)
+                ));
+            }
+            // message_start, content_block_stop, ping and unknown future
+            // event types carry nothing we need.
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// Sleep with exponential backoff before a transport retry. Returns `false`
+/// once the retry budget is exhausted.
+async fn transport_backoff(retries: &mut u8, detail: &str) -> bool {
+    if *retries >= MAX_TRANSPORT_RETRIES {
+        return false;
+    }
+    *retries += 1;
+    let delay =
+        Duration::from_secs(TRANSPORT_RETRY_BASE_DELAY_SECS * 2u64.pow(*retries as u32 - 1));
+    log::warn!(
+        "[run] llm openapi transport failure (retry {}/{}): {}; retrying in {:?}",
+        retries,
+        MAX_TRANSPORT_RETRIES,
+        detail,
+        delay
+    );
+    tokio::time::sleep(delay).await;
+    true
+}
+
 /// True when the endpoint error is specifically about the requested output
 /// budget, as opposed to the input prompt itself being too large.
 fn is_max_tokens_error(body: &str) -> bool {
@@ -250,61 +358,7 @@ pub trait LlmInterfaceOpenApi {
     ) -> Result<String, Box<dyn std::error::Error>>;
 }
 
-pub struct LlmClaude {}
-pub struct LlmOpenCode {}
 pub struct LlmOpenApi {}
-
-impl LlmInterface for LlmClaude {
-    async fn run(prompt: String) -> Result<String, Box<dyn std::error::Error>> {
-        log::debug!("[run] executing llm claude inference endpoint");
-        let start = Instant::now();
-
-        // TODO: address ARG_MAX issues
-        let output = Command::new("claude").args(vec!["-p", &prompt]).output()?;
-
-        let elapsed = start.elapsed();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        // preserve output
-        println!("{}", stdout);
-        log::info!("[run] executing llm claude completed task in {:?}", elapsed);
-
-        if !output.status.success() {
-            // return the first failure (fail fast)
-            return Err(Box::from(stderr));
-        }
-
-        Ok(stdout)
-    }
-}
-
-impl LlmInterface for LlmOpenCode {
-    async fn run(prompt: String) -> Result<String, Box<dyn std::error::Error>> {
-        log::debug!("[run] executing llm opencode inference endpoint");
-        let start = Instant::now();
-
-        let output = Command::new("opencode")
-            .args(vec!["-p", &prompt])
-            .output()?;
-
-        let elapsed = start.elapsed();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        // preserve output
-        println!("{}", stdout);
-        log::info!(
-            "[run] executing llm opencode completed task in {:?}",
-            elapsed
-        );
-
-        if !output.status.success() {
-            // return the first failure (fail fast)
-            return Err(Box::from(stderr));
-        }
-
-        Ok(stdout)
-    }
-}
 
 impl LlmInterfaceOpenApi for LlmOpenApi {
     async fn run(
@@ -378,8 +432,15 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
         let client_res = Client::builder()
             .danger_accept_invalid_certs(true)
             .http1_title_case_headers()
-            .timeout(Duration::new(1200, 0))
+            .timeout(Duration::from_secs(REQUEST_TOTAL_TIMEOUT_SECS))
+            .read_timeout(Duration::from_secs(STREAM_READ_TIMEOUT_SECS))
             .build();
+
+        // Anthropic-compatible endpoints are streamed: a non-streaming request
+        // leaves the connection silent for the whole generation (7+ minutes for
+        // a full kernel rewrite), which proxies drop as idle. The OpenAI-style
+        // path keeps its existing non-streaming behaviour.
+        let use_stream = response_type == "Enmaas";
 
         let client = match client_res {
             Ok(client) => {
@@ -397,7 +458,7 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
             let rs = RequestSchema {
                 model: model.clone(),
                 // temperature: 0.1,
-                stream: false,
+                stream: use_stream,
                 max_tokens,
                 // top_p: 0.8,
                 messages: vec_msgs.clone(),
@@ -419,26 +480,13 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
                 request = request.header("anthropic-beta", beta);
             }
 
-            let result = match request.body(json_request).send().await {
+            let mut result = match request.body(json_request).send().await {
                 Ok(result) => result,
                 Err(e) => {
                     let detail = describe_reqwest_error(&e);
                     let transient =
                         e.is_timeout() || e.is_connect() || e.is_request() || e.is_body();
-                    if transient && transport_retries < MAX_TRANSPORT_RETRIES {
-                        transport_retries += 1;
-                        let delay = Duration::from_secs(
-                            TRANSPORT_RETRY_BASE_DELAY_SECS
-                                * 2u64.pow(transport_retries as u32 - 1),
-                        );
-                        log::warn!(
-                            "[run] llm openapi transport failure (retry {}/{}): {}; retrying in {:?}",
-                            transport_retries,
-                            MAX_TRANSPORT_RETRIES,
-                            detail,
-                            delay
-                        );
-                        tokio::time::sleep(delay).await;
+                    if transient && transport_backoff(&mut transport_retries, &detail).await {
                         continue;
                     }
                     return Err(Box::from(format!(
@@ -451,6 +499,67 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
 
             let status = result.status();
             log::debug!("[run] llm openapi response status {}", status);
+
+            if use_stream && status == StatusCode::OK {
+                let mut acc = StreamAccumulator::default();
+                let mut stream_failure: Option<String> = None;
+                loop {
+                    match result.chunk().await {
+                        Ok(Some(chunk)) => {
+                            if let Err(api_error) = acc.feed(&chunk) {
+                                return Err(Box::from(format!(
+                                    "[run] llm openapi stream error event: {}",
+                                    api_error
+                                )));
+                            }
+                            if acc.done {
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            stream_failure = Some(describe_reqwest_error(&e));
+                            break;
+                        }
+                    }
+                }
+
+                if !acc.done {
+                    // Connection died mid-generation: nothing usable came back,
+                    // so this is retried like any other transport failure.
+                    let detail = stream_failure
+                        .unwrap_or_else(|| "stream closed before message_stop".to_string());
+                    let detail = format!("{} (after {} chars of output)", detail, acc.text.len());
+                    if transport_backoff(&mut transport_retries, &detail).await {
+                        continue;
+                    }
+                    return Err(Box::from(format!(
+                        "[run] llm openapi stream interrupted after {} attempt(s): {}",
+                        transport_retries + 1,
+                        detail,
+                    )));
+                }
+
+                let stop_reason = acc.stop_reason.as_deref().unwrap_or("unknown");
+                if stop_reason == "max_tokens" {
+                    log::warn!(
+                        "[run] response hit max_tokens {}; generated code is likely truncated",
+                        max_tokens
+                    );
+                } else if stop_reason == "refusal" {
+                    return Err(Box::from(
+                        "[run] llm openapi request was refused (stop_reason: refusal)",
+                    ));
+                }
+                log::info!(
+                    "[run] executing llm openapi completed task in {:?} (stop_reason {}, output tokens {})",
+                    start.elapsed(),
+                    stop_reason,
+                    acc.output_tokens
+                        .map_or("unknown".to_string(), |t| t.to_string())
+                );
+                return Ok(acc.text);
+            }
             let contents = match result.bytes().await {
                 Ok(contents) => contents,
                 Err(e) => {
@@ -513,5 +622,77 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
 
             return Err(Box::from(format!("[run] llm openapi {} {}", status, body)));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE_STREAM: &str = "event: message_start\r\n\
+data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10}}}\r\n\r\n\
+event: content_block_start\n\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"hidden\"}}\n\n\
+event: ping\n\
+data: {\"type\": \"ping\"}\n\n\
+event: content_block_start\n\
+data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello \"}}\n\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"kernel\"}}\n\n\
+event: message_delta\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":42}}\n\n\
+event: message_stop\n\
+data: {\"type\":\"message_stop\"}\n\n";
+
+    #[test]
+    fn stream_collects_text_and_skips_thinking() {
+        let mut acc = StreamAccumulator::default();
+        acc.feed(SAMPLE_STREAM.as_bytes()).unwrap();
+        assert_eq!(acc.text, "Hello kernel");
+        assert_eq!(acc.stop_reason.as_deref(), Some("end_turn"));
+        assert_eq!(acc.output_tokens, Some(42));
+        assert!(acc.done);
+    }
+
+    #[test]
+    fn stream_handles_events_split_across_chunks() {
+        let mut acc = StreamAccumulator::default();
+        for chunk in SAMPLE_STREAM.as_bytes().chunks(7) {
+            acc.feed(chunk).unwrap();
+        }
+        assert_eq!(acc.text, "Hello kernel");
+        assert!(acc.done);
+    }
+
+    #[test]
+    fn stream_keeps_multibyte_chars_split_across_chunks() {
+        let event = "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"2 × 4\"}}\n\n";
+        let bytes = event.as_bytes();
+        let split = event.find('×').unwrap() + 1; // inside the 2-byte char
+        let mut acc = StreamAccumulator::default();
+        acc.feed(&bytes[..split]).unwrap();
+        acc.feed(&bytes[split..]).unwrap();
+        assert_eq!(acc.text, "2 × 4");
+    }
+
+    #[test]
+    fn stream_reports_error_events() {
+        let mut acc = StreamAccumulator::default();
+        let err = acc
+            .feed(b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n")
+            .unwrap_err();
+        assert_eq!(err, "overloaded_error: Overloaded");
+    }
+
+    #[test]
+    fn stream_without_message_stop_is_not_done() {
+        let mut acc = StreamAccumulator::default();
+        let cut = SAMPLE_STREAM.find("event: message_delta").unwrap();
+        acc.feed(&SAMPLE_STREAM.as_bytes()[..cut]).unwrap();
+        assert!(!acc.done);
     }
 }
