@@ -146,7 +146,7 @@ pub fn pick_weighted(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    if weights.len() > 0 {
+    if weights.is_empty() {
         log::trace!("[pick_weighted] {:?}", weights);
 
         // not used

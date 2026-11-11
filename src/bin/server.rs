@@ -95,11 +95,8 @@ fn main() {
                         if let Some(ref beta) = parameters.llm_beta_header {
                             hm.insert("llm_beta_header".to_string(), beta.to_owned());
                         }
-                        match parameters.response_type {
-                            Some(ref res_type) => {
-                                hm.insert("response_type".to_string(), res_type.to_string());
-                            }
-                            None => {}
+                        if let Some(ref res_type) = parameters.response_type {
+                            hm.insert("response_type".to_string(), res_type.to_string());
                         };
                         match parameters.token_file {
                             Some(ref tf) => {

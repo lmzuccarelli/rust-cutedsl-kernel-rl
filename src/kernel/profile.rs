@@ -163,11 +163,10 @@ impl ProfileInterface for Profile {
     fn get_elapsed_cycles(ncu_report: String) -> Result<i64, Box<dyn std::error::Error>> {
         let re = Regex::new("[\\s]{4}Elapsed\\sCycles[\\s]+cycle[\\s]+([0-9,]*)")?;
         let mut elapsed_cycles = 0;
-        for cap in re.captures_iter(&ncu_report) {
+        if let Some(cap) = re.captures_iter(&ncu_report).next() {
             // we are only interested in the first Elapsed Cycles result in the file
             elapsed_cycles = cap[1].to_string().replace(",", "").parse::<i64>()?;
             log::trace!("[get_elapsed_cycles] {}", elapsed_cycles);
-            break;
         }
         Ok(elapsed_cycles)
     }
@@ -175,7 +174,7 @@ impl ProfileInterface for Profile {
     fn get_category(state_report: String) -> Result<String, Box<dyn std::error::Error>> {
         let re = Regex::new("[\\*]{2}PRIMARY_BOTTLENECK:[\\*]{2}[\\s]*([`a-zA-Z_]*)")?;
         let mut category = String::new();
-        for cap in re.captures_iter(&state_report) {
+        if let Some(cap) = re.captures_iter(&state_report).next() {
             category = cap[1].to_string().replace("`", "").replace("_bound", "");
             log::trace!("[get_category] {}", category);
         }

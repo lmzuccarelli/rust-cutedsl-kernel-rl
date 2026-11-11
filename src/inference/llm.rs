@@ -4,6 +4,7 @@ use reqwest::Client;
 use serde_derive::Deserialize;
 use serde_derive::Serialize;
 use serde_json::Value;
+use std::error::Error as StdError;
 use std::process::Command;
 use std::time::Duration;
 use std::time::Instant;
@@ -179,11 +180,53 @@ impl Default for LlmTokenConfig {
 const MIN_OUTPUT_TOKENS: i32 = 4_096;
 // Some gateways advertise a lower output cap than the model actually supports.
 const MAX_MAX_TOKENS_RETRIES: u8 = 2;
+// A `status: None` reqwest failure means no HTTP response was received at all
+// (DNS, TCP, TLS, connection reset, timeout). Those are worth retrying before
+// giving up, unlike 4xx responses which are deterministic.
+const MAX_TRANSPORT_RETRIES: u8 = 2;
+// Exponential backoff base: attempt 1 waits 2s, attempt 2 waits 4s.
+const TRANSPORT_RETRY_BASE_DELAY_SECS: u64 = 2;
 
-/// Conservative token estimate: roughly four characters per token for code and
-/// English. Deliberately rounds up so the budget stays inside the window.
+// Measured ratio for large kernel + NCU payloads is ~2.6 chars/token (a
+// 179k-char prompt was counted as ~69k input tokens by the endpoint). The old
+// 4 chars/token estimate under-counted by ~55%, which can overrun a 200k
+// window once a 128k output budget is requested. 2.5 chars/token deliberately
+// over-counts instead, keeping the prompt + max_tokens total inside the window.
+const CHARS_PER_TOKEN_NUMERATOR: i64 = 2;
+const CHARS_PER_TOKEN_DENOMINATOR: i64 = 5;
+
+/// Conservative token estimate for code, English and tabular NCU dumps.
+/// Deliberately rounds up so the budget stays inside the context window.
 fn estimate_tokens(text: &str) -> i64 {
-    ((text.chars().count() as i64) + 3) / 4
+    let chars = text.chars().count() as i64;
+    let numerator = chars * CHARS_PER_TOKEN_NUMERATOR;
+    (numerator + CHARS_PER_TOKEN_DENOMINATOR - 1) / CHARS_PER_TOKEN_DENOMINATOR
+}
+
+/// Render a reqwest error together with its full source chain and the
+/// classification flags. `Display` on `reqwest::Error` often only says "error
+/// sending request", hiding the useful cause (e.g. "connection reset by peer"
+/// or "tls handshake eof").
+fn describe_reqwest_error(err: &reqwest::Error) -> String {
+    let mut message = format!(
+        "{} (timeout={}, connect={}, request={}, body={})",
+        err,
+        err.is_timeout(),
+        err.is_connect(),
+        err.is_request(),
+        err.is_body()
+    );
+    let mut source = StdError::source(err);
+    let mut depth = 0;
+    while let Some(cause) = source {
+        message.push_str(&format!("; caused by: {}", cause));
+        source = cause.source();
+        depth += 1;
+        if depth >= 8 {
+            break;
+        }
+    }
+    message
 }
 
 /// True when the endpoint error is specifically about the requested output
@@ -301,11 +344,17 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
         // Never ask for more than the user configured, and never ask for more
         // than the space left in the context window. This is the key change vs.
         // the old hardcoded `max_tokens: 128000`.
-        let mut max_tokens =
-            (token_config.max_output_tokens.max(MIN_OUTPUT_TOKENS) as i64).min(available) as i32;
-        if max_tokens < 40_000 {
+        let requested_max_tokens = token_config.max_output_tokens.max(MIN_OUTPUT_TOKENS) as i64;
+        let mut max_tokens = requested_max_tokens.min(available) as i32;
+        if (max_tokens as i64) < requested_max_tokens {
             log::warn!(
-                "[run] only {} output tokens available; a full kernel rewrite may be truncated. Reduce the prompt or raise `llm_context_window`.",
+                "[run] context window limits output to {} tokens (requested {}); a full kernel rewrite may be truncated. Reduce the prompt or raise `llm_context_window`.",
+                max_tokens,
+                requested_max_tokens
+            );
+        } else if max_tokens < 40_000 {
+            log::warn!(
+                "[run] only {} output tokens requested; a full kernel rewrite may be truncated. Raise `llm_max_output_tokens`.",
                 max_tokens
             );
         }
@@ -343,6 +392,7 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
         };
 
         let mut retries = 0u8;
+        let mut transport_retries = 0u8;
         loop {
             let rs = RequestSchema {
                 model: model.clone(),
@@ -372,17 +422,45 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
             let result = match request.body(json_request).send().await {
                 Ok(result) => result,
                 Err(e) => {
+                    let detail = describe_reqwest_error(&e);
+                    let transient =
+                        e.is_timeout() || e.is_connect() || e.is_request() || e.is_body();
+                    if transient && transport_retries < MAX_TRANSPORT_RETRIES {
+                        transport_retries += 1;
+                        let delay = Duration::from_secs(
+                            TRANSPORT_RETRY_BASE_DELAY_SECS
+                                * 2u64.pow(transport_retries as u32 - 1),
+                        );
+                        log::warn!(
+                            "[run] llm openapi transport failure (retry {}/{}): {}; retrying in {:?}",
+                            transport_retries,
+                            MAX_TRANSPORT_RETRIES,
+                            detail,
+                            delay
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
                     return Err(Box::from(format!(
-                        "[run] llm openapi status : {:?} : {} ",
-                        e.status(),
-                        e,
+                        "[run] llm openapi transport failure after {} attempt(s): {}",
+                        transport_retries + 1,
+                        detail,
                     )));
                 }
             };
 
             let status = result.status();
             log::debug!("[run] llm openapi response status {}", status);
-            let contents = result.bytes().await?;
+            let contents = match result.bytes().await {
+                Ok(contents) => contents,
+                Err(e) => {
+                    return Err(Box::from(format!(
+                        "[run] llm openapi failed reading response body (status {}): {}",
+                        status,
+                        describe_reqwest_error(&e)
+                    )));
+                }
+            };
 
             if status == StatusCode::OK {
                 log::trace!(

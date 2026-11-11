@@ -42,7 +42,7 @@ pub struct OptimizationPlan {
 impl ControllerInterface for Controller {
     fn init(parameters: Parameters) -> Result<(), Box<dyn std::error::Error>> {
         for item in parameters.workflow_batch.iter() {
-            let Some(name) = item.split("/").into_iter().last() else {
+            let Some(name) = item.split("/").last() else {
                 return Err(Box::from("[init] workflow batch item not properly defined"));
             };
             clean_trajectories(format!(
@@ -70,7 +70,7 @@ impl ControllerInterface for Controller {
     ) -> Result<(), Box<dyn std::error::Error>> {
         for item in parameters.workflow_batch.iter() {
             log::info!("[execute_baseline_flow] item {}", item);
-            let Some(kernel_file) = item.split("/").into_iter().last() else {
+            let Some(kernel_file) = item.split("/").last() else {
                 return Err(Box::from(
                     "[execute_baseline_flow] workflow batch item not properly defined",
                 ));
@@ -353,7 +353,7 @@ impl ControllerInterface for Controller {
             // get baseline state and elapsed_cycles
             // optimization plans were calculated in the baseline run
             // no optimization plan (json) file is found in the step_0 directories
-            let Some(baseline_kernel_file) = item.split("/").into_iter().last() else {
+            let Some(baseline_kernel_file) = item.split("/").last() else {
                 return Err(Box::from(
                     "[execute_agent_flow] workflow batch item not properly defined",
                 ));

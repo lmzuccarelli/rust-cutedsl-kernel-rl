@@ -51,7 +51,7 @@ impl ExecuteInterface for Execute {
                     };
                     return Err(Box::from(format!(
                         "[run] (executeinterface) result (exited non zero) {}",
-                        output.to_string()
+                        output
                     )));
                 }
                 // preserve output
