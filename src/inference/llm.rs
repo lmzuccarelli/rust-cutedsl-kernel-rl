@@ -124,11 +124,11 @@ pub struct CompletionTokensDetails {
 pub struct RequestSchema {
     pub model: String,
     pub messages: Vec<RequestMessage>,
-    pub temperature: f64,
-    pub top_p: f64,
+    // pub temperature: f64,
+    // pub top_p: f64,
     pub stream: bool,
     pub max_tokens: i32,
-    pub chat_template_kwargs: Option<ChatTemplate>,
+    // pub chat_template_kwargs: Option<ChatTemplate>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -242,18 +242,18 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
 
         // TODO: check if kwargs is supported
         // This is used to suppress thinking in qwen3.8-27B
-        let ct = ChatTemplate {
+        let _ct = ChatTemplate {
             enable_thinking: false,
         };
 
         let rs = RequestSchema {
             model,
-            temperature: 0.1,
+            // temperature: 0.1,
             stream: false,
-            max_tokens: 32000,
-            top_p: 0.8,
+            max_tokens: 128000,
+            // top_p: 0.8,
             messages: vec_msgs,
-            chat_template_kwargs: Some(ct.clone()),
+            // chat_template_kwargs: Some(ct.clone()),
         };
         let json_request = serde_json::to_string(&rs)?;
         log::trace!("[run] openapi json payload {}", json_request);
