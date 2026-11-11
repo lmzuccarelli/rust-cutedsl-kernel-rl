@@ -1,0 +1,32 @@
+{
+  "name": "rust-cutedsl-kernel-rl",
+  "log_level": "debug",
+  "gpu_server_url": "http://192.168.1.10:3202",
+  "llm_server_url": "http://192.168.1.178:3200",
+  "workflow_batch": [
+    "cutedsl-kernels/cuteDSL_gemm.py"
+  ],
+  "kernel_names": {
+    "cutedsl-kernels/cuteDSL_gemm.py": "dense_gemm_kernel"
+  },
+  "working_dir": "/home/luzuccar/Projects/rust-cutedsl-kernel-rl",
+  "cutedsl_env_path": "/home/luzuccar/Projects/cutlass/target_cute_env",
+  "llm_agent": "Api",
+  "llm_model": "claude-opus-4-8",
+  "controller_mode": "Baseline",
+  "openapi_url": "https://api.enmaas.devshift.net/v1/messages",
+  "response_type": "Enmaas",
+  "token_file": "/home/luzuccar/.enmaas/token",
+  "llm_max_output_tokens": 128000,
+  "llm_context_window": 1000000,
+  "llm_input_token_margin": 2000,
+  "max_rollout": 10,
+  "rollout_start": 0,
+  "flow_control": 127,
+  "gpu_arch": 120,
+  "create_stats": true,
+  "use_error_vec": true,
+  "acceptance_threshold": 0.97,
+  "degradation_threshold": -15.0,
+  "exclude_trajectories": []
+}
