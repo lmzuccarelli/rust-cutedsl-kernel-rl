@@ -9,14 +9,14 @@
   "kernel_names": {
     "cutedsl-kernels/cuteDSL_gemm.py": "dense_gemm_kernel"
   },
-  "working_dir": "/home/luzuccar/Projects/rust-cutedsl-kernel-rl",
-  "cutedsl_env_path": "/home/luzuccar/Projects/cutlass/target_cute_env",
+  "working_dir": "/home/lzuccarelli/Projects/rust-cutedsl-kernel-rl",
+  "cutedsl_env_path": "/home/luzuccarelli/Projects/cutlass/target_cute_env",
   "llm_agent": "Api",
   "llm_model": "claude-opus-4-8",
   "controller_mode": "Baseline",
   "openapi_url": "https://api.enmaas.devshift.net/v1/messages",
   "response_type": "Enmaas",
-  "token_file": "/home/luzuccar/.enmaas/token",
+  "token_file": "/home/luzuccarelli/.enmaas/token",
   "llm_max_output_tokens": 128000,
   "llm_context_window": 1000000,
   "llm_input_token_margin": 2000,

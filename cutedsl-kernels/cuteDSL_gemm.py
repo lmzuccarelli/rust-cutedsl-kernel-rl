@@ -1,37 +1,3 @@
-# cat .venv/lib/python3.12/site-packages/flashinfer/gemm/kernels/dense_blockscaled_gemm_sm120_b12x.py (taken from the installed flashinfer package)
-# versions: flashinfer-cubin                         0.7.0.post1
-#           flashinfer-python                        0.7.0.post1
-# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
-
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-# This file is ported from the CUTLASS dense block-scaled GEMM example
-# and adapted for the current Blackwell GeForce target.
-
 from dataclasses import dataclass
 import importlib
 from typing import Literal, Optional, Tuple
@@ -67,8 +33,6 @@ class _IketShim:
 
 
 def _load_iket():
-    # Keep the optional experimental import out of CuTe's AST import replay:
-    # normal CUDA 13.0 builds raise NotImplementedError while importing it.
     for module_name in ("cutlass.cute.experimental", "cutlass.cute"):
         try:
             return importlib.import_module(module_name).iket
@@ -84,9 +48,6 @@ from flashinfer.cute_dsl.utils import (
     sm120_make_smem_layout_sfb,
 )
 
-
-# Vendored from b12x.cute.fp4 (so this kernel does not depend on the external
-# b12x package). Used only by the kernel's opt-in split-K atomic-reduction path.
 @dsl_user_op
 def get_ptr_as_int64(tensor: cute.Tensor, offset, *, loc=None, ip=None) -> Int64:
     """Get the memory address of tensor[offset] as Int64."""
@@ -141,13 +102,8 @@ class _DenseGemmPlan:
     swap_ab: bool
 
 
-# @dsl_user_op on PersistentTileSchedulerParams.__init__ can rename attributes
-# (e.g. raster_along_m -> _raster_along_m, cluster_shape_major_fdd ->
-# cluster_shape_m_fdd) but __extract_mlir_values__ (used by TVM-FFI)
-# still references the original names.
 _orig_extract = utils.PersistentTileSchedulerParams.__extract_mlir_values__
 
-# Map of source-code attr name -> runtime attr name set by @dsl_user_op
 _ATTR_RENAMES = {
     "raster_along_m": "_raster_along_m",
     "cluster_shape_major_fdd": "cluster_shape_m_fdd",
@@ -1835,17 +1791,6 @@ class DenseGemmKernel:
                 if cutlass.const_expr(self.enable_iket):
                     iket.range_pop()
 
-                # SVDQuant fusion: the load warp stages one
-                # mainloop-byte-equivalent BF16 rank tile at a time into the
-                # released A/B mainloop storage. The MMA warps consume each
-                # published tile directly into the FP32 NVFP4 accumulator.
-                # swap_ab also swaps the correction's A/B operands, so both MMA
-                # paths retain identical C-fragment ownership.
-                # Match the SM100 CUTLASS contract: svdquant_l1 is supplied as
-                # L1 / alpha.  The common epilogue's alpha multiply therefore
-                # restores the unscaled correction:
-                #   alpha * (residual + D @ (L1 / alpha).T)
-                #     = alpha * residual + D @ L1.T.
                 if cutlass.const_expr(svdquant_d is not None):
                     if cutlass.const_expr(self.enable_iket):
                         iket.range_push("mma_lora")
@@ -3118,31 +3063,12 @@ def _select_default_dense_gemm_plan(
     )
 
 
-# Alias for FlashInfer integration
 Sm120B12xBlockScaledDenseGemmKernel = DenseGemmKernel
 
-
-# ---------------------------------------------------------------------------
-# Standalone execution + profiling harness
-# ---------------------------------------------------------------------------
-# Makes this file directly runnable so the RL harness can drive THIS kernel:
-#   * src/kernel/execute.rs runs `python cuteDSL_gemm.py` and treats a non-zero
-#     exit (or the word "failed" in stdout) as failure.
-#   * src/kernel/profile.rs greps for the cute-kernel decorator + `def <name>`
-#     `ncu --kernel-name regex:<name> ... python3 cuteDSL_gemm.py`, so the file
-#     must actually launch the kernel when executed.
-# The launch path mirrors flashinfer's B12xFp4GemmRunner.forward but constructs
-# the LOCAL DenseGemmKernel (so profiling reflects edits to this file).
-# Validation mirrors correctness_test_cuteDSL.py: quantize -> torch.mm reference
-# -> cosine similarity.
 def _run_harness() -> int:
     import os
     import sys
 
-    # The RL harness may invoke `python`/`python3` without activating the venv,
-    # so prepend this interpreter's bin dir (where flashinfer's JIT `ninja` lives)
-    # and CUDA's bin (nvcc) to PATH; otherwise the first-use JIT build fails with
-    # "No such file or directory: 'ninja'".
     _extra_paths = [os.path.dirname(sys.executable), "/usr/local/cuda/bin"]
     os.environ["PATH"] = os.pathsep.join(
         _extra_paths + [os.environ.get("PATH", "")]

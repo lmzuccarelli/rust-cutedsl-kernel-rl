@@ -372,7 +372,11 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
             let result = match request.body(json_request).send().await {
                 Ok(result) => result,
                 Err(e) => {
-                    return Err(Box::from(format!("[run] llm openapi error {}", e)));
+                    return Err(Box::from(format!(
+                        "[run] llm openapi status : {:?} : {} ",
+                        e.status(),
+                        e,
+                    )));
                 }
             };
 
