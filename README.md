@@ -150,6 +150,50 @@ sudo ncu --target-processes all --kernel-name regex:<kernel-function_name> --set
 sudo ncu --import profile-<kernel-name>.ncu-rep --page details > kernel-name.profile
 ```
 
+## LLM token budget
+
+The LLM prompt for a code-generation step contains the full kernel source, the
+NCU profile and the optimization database. For `cuteDSL_gemm.py` that is roughly
+140 KB of Python (~31k tokens), a 13 KB NCU report (~3k tokens) and ~19 KB of
+optimization guidance (~5k tokens), so around **40k input tokens** before the
+chat wrapper. The old code also hardcoded `max_tokens: 128000`, which many
+gateways reject even when the model itself supports a 128k output budget.
+
+The controller now budgets the request before calling the endpoint:
+
+- `llm_max_output_tokens` (default `64000`) is the upper bound for `max_tokens`.
+- `llm_context_window` (default `200000`) is the context window exposed by your
+  endpoint. Raise it to `1000000` only if the gateway actually serves the
+  Claude 1M window; the conservative default prevents an opaque 400.
+- `llm_input_token_margin` (default `2000`) is reserved for tokenizer variance.
+- `llm_beta_header` (optional) is sent as the `anthropic-beta` header, for
+  gateways that still require a context beta flag.
+
+The effective `max_tokens` is
+`min(llm_max_output_tokens, llm_context_window - estimated_input_tokens - margin)`.
+If the prompt alone does not fit, the call fails early with a message that says
+which knob to change instead of sending an oversized payload. If a gateway
+rejects the requested output budget, the call automatically retries with half
+the value (twice).
+
+For very large kernels the long-term fix is to send only the section being
+edited and ask the model for a patch/diff rather than a complete file; that
+keeps both the input and output well below any context limit.
+
+### Diagnosing the endpoint error
+
+`process_post_call` writes the response body to the `.txt`/`.json` file in the
+trajectory even when the HTTP status is not 200, so inspect e.g.
+`replay-buffer/<model>/<kernel>/rl-ncu/baseline/llm_state_response.txt`:
+
+- `prompt is too long` / `context_length_exceeded` -> input is too large.
+  Reduce the code/NCU payload or raise `llm_context_window`.
+- an error mentioning `max_tokens` / `max output tokens` -> the endpoint caps
+  the output budget. Lower `llm_max_output_tokens` (the retry logic also does
+  this automatically).
+- `413` / `request entity too large` -> the body size limit, not the token
+  limit. Reduce the payload or split the request.
+
 ## Replay buffer
 
 The actual trajectory and steps within each trajectory has not been pushed into this repo, we are currently looking into creating

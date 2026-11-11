@@ -148,6 +148,54 @@ pub trait LlmInterface {
     async fn run(prompt: String) -> Result<String, Box<dyn std::error::Error>>;
 }
 
+/// Token budget for an OpenAPI/Anthropic-compatible endpoint.
+///
+/// `max_output_tokens` is only an upper bound: the value actually sent is also
+/// capped by the room left in the context window after the prompt is accounted
+/// for. This avoids the hard failure that occurs when a large kernel + NCU
+/// payload and a fixed `max_tokens` request cannot both fit.
+#[derive(Debug, Clone)]
+pub struct LlmTokenConfig {
+    pub max_output_tokens: i32,
+    pub context_window: i32,
+    pub input_token_margin: i32,
+    pub beta_header: Option<String>,
+}
+
+impl Default for LlmTokenConfig {
+    fn default() -> Self {
+        Self {
+            max_output_tokens: 64_000,
+            context_window: 200_000,
+            input_token_margin: 2_000,
+            beta_header: None,
+        }
+    }
+}
+
+// Below this there is not enough room to produce a useful kernel rewrite, so
+// fail with an actionable message instead of letting the endpoint return an
+// opaque 400.
+const MIN_OUTPUT_TOKENS: i32 = 4_096;
+// Some gateways advertise a lower output cap than the model actually supports.
+const MAX_MAX_TOKENS_RETRIES: u8 = 2;
+
+/// Conservative token estimate: roughly four characters per token for code and
+/// English. Deliberately rounds up so the budget stays inside the window.
+fn estimate_tokens(text: &str) -> i64 {
+    ((text.chars().count() as i64) + 3) / 4
+}
+
+/// True when the endpoint error is specifically about the requested output
+/// budget, as opposed to the input prompt itself being too large.
+fn is_max_tokens_error(body: &str) -> bool {
+    let body = body.to_ascii_lowercase();
+    body.contains("max_tokens")
+        || body.contains("max output")
+        || body.contains("max_completion_tokens")
+        || body.contains("maximum allowed number of output tokens")
+}
+
 pub trait LlmInterfaceOpenApi {
     async fn run(
         prompt: String,
@@ -155,6 +203,7 @@ pub trait LlmInterfaceOpenApi {
         token: String,
         model: String,
         response_type: String,
+        token_config: LlmTokenConfig,
     ) -> Result<String, Box<dyn std::error::Error>>;
 }
 
@@ -221,14 +270,45 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
         token: String,
         model: String,
         response_type: String,
+        token_config: LlmTokenConfig,
     ) -> Result<String, Box<dyn std::error::Error>> {
         log::debug!("[run] executing llm {} inference endpoint", response_type);
         log::debug!("[run] executing llm url {}", url);
         log::debug!("[run] executing llm model {}", model);
-        log::debug!("[run] executing llm prompt len {}", prompt.len());
-        log::debug!("[run] executing llm prompt len {}", prompt.len());
 
         let start = Instant::now();
+
+        let input_tokens = estimate_tokens(&prompt);
+        let context_window = token_config.context_window as i64;
+        let margin = token_config.input_token_margin.max(0) as i64;
+        let available = context_window - input_tokens - margin;
+        log::info!(
+            "[run] token budget: prompt chars {}, estimated input tokens {}, context window {}, safety margin {}, available output {}",
+            prompt.len(),
+            input_tokens,
+            context_window,
+            margin,
+            available
+        );
+
+        if available < MIN_OUTPUT_TOKENS as i64 {
+            return Err(Box::from(format!(
+                "[run] prompt does not fit the configured context window: ~{} input tokens + {} safety margin > {} context window. Reduce the code/NCU payload, raise `llm_context_window`, or use a model/endpoint with a larger context window.",
+                input_tokens, margin, context_window
+            )));
+        }
+
+        // Never ask for more than the user configured, and never ask for more
+        // than the space left in the context window. This is the key change vs.
+        // the old hardcoded `max_tokens: 128000`.
+        let mut max_tokens =
+            (token_config.max_output_tokens.max(MIN_OUTPUT_TOKENS) as i64).min(available) as i32;
+        if max_tokens < 40_000 {
+            log::warn!(
+                "[run] only {} output tokens available; a full kernel rewrite may be truncated. Reduce the prompt or raise `llm_context_window`.",
+                max_tokens
+            );
+        }
 
         let system_msg = RequestMessage {
             role: "user".to_string(),
@@ -246,18 +326,6 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
             enable_thinking: false,
         };
 
-        let rs = RequestSchema {
-            model,
-            // temperature: 0.1,
-            stream: false,
-            max_tokens: 128000,
-            // top_p: 0.8,
-            messages: vec_msgs,
-            // chat_template_kwargs: Some(ct.clone()),
-        };
-        let json_request = serde_json::to_string(&rs)?;
-        log::trace!("[run] openapi json payload {}", json_request);
-
         let client_res = Client::builder()
             .danger_accept_invalid_certs(true)
             .http1_title_case_headers()
@@ -274,65 +342,94 @@ impl LlmInterfaceOpenApi for LlmOpenApi {
             }
         };
 
-        let client_res = client
-            .post(url)
-            .bearer_auth(token.trim())
-            .header("Content-Type", "application/json")
-            .header("X-Api-Key", token.trim())
-            .body(json_request)
-            .send()
-            .await;
+        let mut retries = 0u8;
+        loop {
+            let rs = RequestSchema {
+                model: model.clone(),
+                // temperature: 0.1,
+                stream: false,
+                max_tokens,
+                // top_p: 0.8,
+                messages: vec_msgs.clone(),
+                // chat_template_kwargs: Some(ct.clone()),
+            };
+            let json_request = serde_json::to_string(&rs)?;
+            log::trace!(
+                "[run] openapi json payload (max_tokens {}) {}",
+                max_tokens,
+                json_request
+            );
 
-        let response = match client_res {
-            Ok(result) => {
-                let status = result.status();
-                log::debug!("[run] llm openapi response status {}", status);
-                match status {
-                    StatusCode::OK => {
-                        let contents = result.bytes().await?;
-                        log::trace!(
-                            "[run] llm openapi client response {}",
-                            String::from_utf8(contents.to_vec()).unwrap()
-                        );
-                        match response_type.as_str() {
-                            "Enmaas" => {
-                                let chat_response: EnMaasResponse =
-                                    serde_json::from_slice(&contents)?;
-                                chat_response.content[0].text.clone()
-                            }
-                            "Openai" => {
-                                let chat_response: OpenaiChatCompletions =
-                                    serde_json::from_slice(&contents)?;
-                                chat_response.choices[0].message.content.clone()
-                            }
-                            &_ => {
-                                let chat_response: OpenaiChatCompletions =
-                                    serde_json::from_slice(&contents)?;
-                                chat_response.choices[0].message.content.clone()
-                            }
-                        }
-                    }
-                    _ => {
-                        let contents = result.bytes().await?;
-                        return Err(Box::from(format!(
-                            "[run] llm openapi {}",
-                            String::from_utf8(contents.to_vec())
-                                .unwrap_or("could not parse error".to_string())
-                        )));
-                    }
+            let mut request = client
+                .post(url.as_str())
+                .bearer_auth(token.trim())
+                .header("Content-Type", "application/json")
+                .header("X-Api-Key", token.trim());
+            if let Some(ref beta) = token_config.beta_header {
+                request = request.header("anthropic-beta", beta);
+            }
+
+            let result = match request.body(json_request).send().await {
+                Ok(result) => result,
+                Err(e) => {
+                    return Err(Box::from(format!("[run] llm openapi error {}", e)));
                 }
-            }
-            Err(e) => {
-                return Err(Box::from(format!("[run] llm openapi error {}", e)));
-            }
-        };
+            };
 
-        let elapsed = start.elapsed();
-        log::info!(
-            "[run] executing llm openapi completed task in {:?}",
-            elapsed
-        );
+            let status = result.status();
+            log::debug!("[run] llm openapi response status {}", status);
+            let contents = result.bytes().await?;
 
-        Ok(response)
+            if status == StatusCode::OK {
+                log::trace!(
+                    "[run] llm openapi client response {}",
+                    String::from_utf8_lossy(&contents)
+                );
+                let response = match response_type.as_str() {
+                    "Enmaas" => {
+                        let chat_response: EnMaasResponse = serde_json::from_slice(&contents)?;
+                        chat_response.content[0].text.clone()
+                    }
+                    "Openai" => {
+                        let chat_response: OpenaiChatCompletions =
+                            serde_json::from_slice(&contents)?;
+                        chat_response.choices[0].message.content.clone()
+                    }
+                    &_ => {
+                        let chat_response: OpenaiChatCompletions =
+                            serde_json::from_slice(&contents)?;
+                        chat_response.choices[0].message.content.clone()
+                    }
+                };
+
+                let elapsed = start.elapsed();
+                log::info!(
+                    "[run] executing llm openapi completed task in {:?}",
+                    elapsed
+                );
+                return Ok(response);
+            }
+
+            let body = String::from_utf8_lossy(&contents).to_string();
+            // Some gateways cap the output budget below the model maximum even
+            // though the model itself supports it. Back off automatically.
+            if retries < MAX_MAX_TOKENS_RETRIES
+                && max_tokens > MIN_OUTPUT_TOKENS
+                && is_max_tokens_error(&body)
+            {
+                let next = (max_tokens / 2).max(MIN_OUTPUT_TOKENS);
+                log::warn!(
+                    "[run] endpoint rejected max_tokens {}; retrying with {} ({})",
+                    max_tokens,
+                    next,
+                    body
+                );
+                max_tokens = next;
+                retries += 1;
+                continue;
+            }
+
+            return Err(Box::from(format!("[run] llm openapi {} {}", status, body)));
+        }
     }
 }

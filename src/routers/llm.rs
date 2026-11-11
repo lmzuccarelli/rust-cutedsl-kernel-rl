@@ -1,6 +1,6 @@
 use crate::config::load::LlmAgent;
 use crate::inference::llm::{
-    LlmClaude, LlmInterface, LlmInterfaceOpenApi, LlmOpenApi, LlmOpenCode,
+    LlmClaude, LlmInterface, LlmInterfaceOpenApi, LlmOpenApi, LlmOpenCode, LlmTokenConfig,
 };
 use crate::utils::common::get_item;
 use custom_logger as log;
@@ -93,7 +93,22 @@ async fn execute_agent(agent_type: LlmAgent, prompt: String) -> (StatusCode, Str
             let url = get_item("openapi_url").unwrap_or("".to_string());
             let model = get_item("model").unwrap_or("".to_string());
             let response_type = get_item("response_type").unwrap_or("".to_string());
-            let res = LlmOpenApi::run(prompt, url, token, model, response_type).await;
+            let token_config = LlmTokenConfig {
+                max_output_tokens: get_item("llm_max_output_tokens")
+                    .ok()
+                    .and_then(|v| v.parse::<i32>().ok())
+                    .unwrap_or(64_000),
+                context_window: get_item("llm_context_window")
+                    .ok()
+                    .and_then(|v| v.parse::<i32>().ok())
+                    .unwrap_or(200_000),
+                input_token_margin: get_item("llm_input_token_margin")
+                    .ok()
+                    .and_then(|v| v.parse::<i32>().ok())
+                    .unwrap_or(2_000),
+                beta_header: get_item("llm_beta_header").ok(),
+            };
+            let res = LlmOpenApi::run(prompt, url, token, model, response_type, token_config).await;
             match res {
                 Ok(contents) => (StatusCode::OK, contents),
                 Err(e) => (
@@ -107,5 +122,5 @@ async fn execute_agent(agent_type: LlmAgent, prompt: String) -> (StatusCode, Str
 }
 
 fn get_agent(params: Vec<&str>) -> LlmAgent {
-    LlmAgent::from_str(params.last().unwrap_or(&"none")).unwrap_or(LlmAgent::Claude)
+    LlmAgent::from_str(params.last().unwrap_or(&"none")).unwrap_or(LlmAgent::Api)
 }

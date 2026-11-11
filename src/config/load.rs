@@ -4,6 +4,25 @@ use std::fmt;
 use std::fs::File;
 use std::str::FromStr;
 
+fn default_llm_max_output_tokens() -> i32 {
+    // A full rewrite of a large CuteDSL kernel needs roughly 30-40k output
+    // tokens, so 64k leaves headroom without asking the endpoint for its
+    // entire output allowance (which some gateways reject outright).
+    64_000
+}
+
+fn default_llm_context_window() -> i32 {
+    // Claude Opus 4.6+ has a 1M token window, but proxy/gateway deployments
+    // often expose the older 200k window. Keep the conservative default and
+    // let the operator raise it in the config.
+    200_000
+}
+
+fn default_llm_input_token_margin() -> i32 {
+    // Headroom for tokenizer variance and the chat/system wrapper.
+    2_000
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Parameters {
     pub name: String,
@@ -33,6 +52,21 @@ pub struct Parameters {
     pub exclude_trajectories: Vec<String>,
     pub acceptance_threshold: f64,
     pub degradation_threshold: f64,
+    // Upper bound for the `max_tokens` field sent to the LLM endpoint. The
+    // effective value is additionally capped by the room left in the context
+    // window after the prompt has been accounted for.
+    #[serde(default = "default_llm_max_output_tokens")]
+    pub llm_max_output_tokens: i32,
+    // Total context window exposed by the endpoint. Used to avoid sending a
+    // request whose prompt + max_tokens cannot fit.
+    #[serde(default = "default_llm_context_window")]
+    pub llm_context_window: i32,
+    // Safety margin subtracted from the context window when budgeting.
+    #[serde(default = "default_llm_input_token_margin")]
+    pub llm_input_token_margin: i32,
+    // Optional `anthropic-beta` header (e.g. for older 1M-context betas).
+    #[serde(default)]
+    pub llm_beta_header: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

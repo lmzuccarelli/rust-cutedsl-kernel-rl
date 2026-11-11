@@ -80,6 +80,21 @@ fn main() {
                     Some(ref openapi_url) => {
                         hm.insert("model".to_string(), parameters.llm_model.clone());
                         hm.insert("openapi_url".to_string(), openapi_url.to_owned());
+                        hm.insert(
+                            "llm_max_output_tokens".to_string(),
+                            parameters.llm_max_output_tokens.to_string(),
+                        );
+                        hm.insert(
+                            "llm_context_window".to_string(),
+                            parameters.llm_context_window.to_string(),
+                        );
+                        hm.insert(
+                            "llm_input_token_margin".to_string(),
+                            parameters.llm_input_token_margin.to_string(),
+                        );
+                        if let Some(ref beta) = parameters.llm_beta_header {
+                            hm.insert("llm_beta_header".to_string(), beta.to_owned());
+                        }
                         match parameters.response_type {
                             Some(ref res_type) => {
                                 hm.insert("response_type".to_string(), res_type.to_string());
