@@ -61,7 +61,7 @@ pub async fn endpoints(req: Request<Incoming>) -> Result<Response<Full<Bytes>>, 
                                 log::error!(
                                     "[endpoints] uploading kernel {} : {:?}",
                                     err,
-                                    work_item
+                                    work_item.kernel_file
                                 );
                                 *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                                 *response.body_mut() = Full::from(format!(

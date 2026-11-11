@@ -1,4 +1,5 @@
 use crate::config::load::WorkItem;
+use crate::utils::common::get_item;
 use custom_logger as log;
 use std::process::Command;
 use std::time::Instant;
@@ -10,9 +11,13 @@ pub trait ExecuteInterface {
 pub struct Execute {}
 
 impl ExecuteInterface for Execute {
+    // The work_item struct has the target_dir passed by the controller in the payload
+    // It's not set via the get_item utility function as its changes
+    // for each trajectory_xxx/step_x
     async fn run(work_item: WorkItem) -> Result<String, Box<dyn std::error::Error>> {
         log::debug!("[run] executing kernel code");
         let start = Instant::now();
+        let cutedsl_env_path = get_item("cutedsl_env_path")?;
 
         let kernel_file = match work_item.kernel_file {
             Some(name) => name,
@@ -29,7 +34,9 @@ impl ExecuteInterface for Execute {
         );
         log::debug!("[run] (executeinterface) kernel {}", kernel_file);
 
-        let output_res = Command::new("python")
+        // this is important as we need the exact path to the cutlass directory
+        // with all dependencies set (i.e flashinfer etc)
+        let output_res = Command::new(format!("{}/bin/python", cutedsl_env_path))
             .args(vec![format!("{}/{}", work_item.target_dir, kernel_file)])
             .output();
 

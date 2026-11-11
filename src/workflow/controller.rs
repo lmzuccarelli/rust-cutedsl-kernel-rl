@@ -114,8 +114,9 @@ impl ControllerInterface for Controller {
             log::debug!("[execute_baseline_flow] reading kernel {}", item);
             let mut code = fs::read_to_string(item)?;
             let payload = format!(
-                r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" , "code": {:?} }}"##,
-                name, parameters.working_dir, parameters.gpu_arch, baseline_dir, kernel_file, code,
+                // r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" , "code": {:?} }}"##,
+                r##"{{ "name": "{}", "target_dir": "{}","kernel_file": "{}" , "code": {:?} }}"##,
+                name, baseline_dir, kernel_file, code,
             );
             // as we are saving locally to replay buffer , change name 'out' to 'replay-buffer'
             let local_baseline_dir = baseline_dir.replace("/out/", "/replay-buffer/");
@@ -132,8 +133,9 @@ impl ControllerInterface for Controller {
 
             if x & 2u8 == 2 {
                 let payload = format!(
-                    r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" }}"##,
-                    name, parameters.working_dir, parameters.gpu_arch, baseline_dir, kernel_file,
+                    // r##"{{ "name": "{}", "working_dir": "{}", "cutedsl_env_path": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" }}"##,
+                    r##"{{ "name": "{}", "target_dir": "{}", "kernel_file": "{}" }}"##,
+                    name, baseline_dir, kernel_file,
                 );
 
                 // call the execute endpoint
@@ -147,8 +149,9 @@ impl ControllerInterface for Controller {
 
             if x & 4u8 == 4 {
                 let payload = format!(
-                    r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" }}"##,
-                    name, parameters.working_dir, parameters.gpu_arch, baseline_dir, kernel_file,
+                    // r##"{{ "name": "{}", "working_dir": "{}", "cutedsl_env_path":"{}"," "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" }}"##,
+                    r##"{{ "name": "{}", "target_dir": "{}", "kernel_file": "{}" }}"##,
+                    name, baseline_dir, kernel_file,
                 );
 
                 // call the nvidia ncu profile endpoint
@@ -476,13 +479,9 @@ impl ControllerInterface for Controller {
                     log::info!("[execute_agent_flow] using path {}", local_target_dir);
 
                     payload = format!(
-                        r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" , "code": {:?} }}"##,
-                        name,
-                        parameters.working_dir,
-                        parameters.gpu_arch,
-                        target_dir,
-                        current_kernel_file,
-                        current_kernel_code
+                        // r##"{{ "name": "{}", "working_dir": "{}", "gpu_arch": "{}" , "target_dir": "{}", "kernel_file": "{}" , "code": {:?} }}"##,
+                        r##"{{ "name": "{}", "target_dir": "{}", "kernel_file": "{}" , "code": {:?} }}"##,
+                        name, target_dir, current_kernel_file, current_kernel_code
                     );
 
                     // 2. upload kernel

@@ -156,6 +156,7 @@ fn main() {
                 "cutedsl_env_path".to_string(),
                 parameters.cutedsl_env_path.clone(),
             );
+            hm.insert("working_dir".to_string(), parameters.working_dir.clone());
 
             // insert the configured kernel-name-to-profile for each workflow
             // batch kernel. Keyed by the workflow name stem (basename without
@@ -269,8 +270,7 @@ pub async fn execute(
     Ok(())
 }
 
-// utility
-
+// utilities
 fn get_port(command: String, parameters: Parameters) -> Result<u16, Box<dyn std::error::Error>> {
     let port = match command.as_str() {
         "gpu" => parameters

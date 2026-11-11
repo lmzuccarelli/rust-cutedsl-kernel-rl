@@ -1,4 +1,5 @@
 use crate::config::load::WorkItem;
+use crate::utils::common::get_item;
 use custom_logger as log;
 use std::env;
 use std::fs;
@@ -18,8 +19,9 @@ impl FileInterface for FileOperation {
         work_item: WorkItem,
         write: bool,
     ) -> Result<String, Box<dyn std::error::Error>> {
+        let working_dir = get_item("working_dir")?;
         // restore working dir
-        env::set_current_dir(work_item.working_dir)?;
+        env::set_current_dir(working_dir)?;
 
         let kernel_code;
         let dir = work_item.target_dir.clone();

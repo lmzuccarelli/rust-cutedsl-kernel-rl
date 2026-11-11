@@ -38,10 +38,8 @@ pub struct Parameters {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WorkItem {
     pub name: String,
-    pub gpu_arch: String,
     pub prompt: Option<String>,
     pub target_dir: String,
-    pub working_dir: String,
     pub kernel_file: Option<String>,
     pub code: Option<String>,
 }

@@ -24,9 +24,10 @@ impl ProfileInterface for Profile {
     async fn run(work_item: WorkItem) -> Result<String, Box<dyn std::error::Error>> {
         let start = Instant::now();
         let mut profile_buffer = String::new();
+        let working_dir = get_item("working_dir")?;
 
         // restore working dir
-        env::set_current_dir(&work_item.working_dir)?;
+        env::set_current_dir(&working_dir)?;
 
         // stable identifier for this workflow batch kernel (basename without the
         // .py extension); used to look up the configured kernel name to profile.
