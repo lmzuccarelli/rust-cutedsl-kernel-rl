@@ -46,7 +46,7 @@ pub struct EnMaasUsage {
     #[serde(rename = "output_tokens")]
     pub output_tokens: i64,
     #[serde(rename = "prompt_tokens_details")]
-    pub prompt_tokens_details: PromptTokensDetails,
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
