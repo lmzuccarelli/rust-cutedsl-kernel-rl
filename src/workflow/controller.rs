@@ -512,7 +512,7 @@ impl ControllerInterface for Controller {
                             process_post_call(Some(file_name), url, payload.clone()).await;
                         match exec_res {
                             Ok(exec) => {
-                                if exec.contains("OK") {
+                                if exec.contains("OK") || exec.contains("PASS") {
                                     log::info!(
                                         "[execute_agent_flow] kernel execute completed successfully"
                                     );
