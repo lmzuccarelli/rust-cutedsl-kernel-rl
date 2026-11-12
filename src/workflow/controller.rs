@@ -15,11 +15,12 @@ use custom_logger as log;
 // use futures::stream::StreamExt;
 use serde_derive::{Deserialize, Serialize};
 use short_id::short_id_with_bytes;
-use std::fs;
-use std::path::Path;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+use std::{
+    fs,
+    path::Path,
+    process, thread,
+    time::{Duration, Instant},
+};
 
 pub trait ControllerInterface {
     async fn get_health(paramaters: Parameters) -> Result<(), Box<dyn std::error::Error>>;
@@ -568,6 +569,9 @@ impl ControllerInterface for Controller {
                             Ok(profile) => profile,
                             Err(e) => {
                                 log::error!("[execute_agent_flow] kernel profile failed {}", e);
+                                if parameters.exit_on_fail {
+                                    process::exit(1);
+                                }
                                 fallback = true;
                                 continue;
                             }

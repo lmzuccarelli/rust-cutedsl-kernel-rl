@@ -24,5 +24,6 @@
   "use_error_vec": true,
   "acceptance_threshold": 0.8,
   "degradation_threshold": -15.0,
-  "exclude_trajectories": []
+  "exclude_trajectories": [],
+  "exit_on_fail": false
 }

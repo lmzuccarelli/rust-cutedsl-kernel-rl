@@ -85,6 +85,10 @@ impl ProfileInterface for Profile {
             log::info!("[run] profiling kernel {}", name);
             let mut cmd = Command::new("sudo");
             cmd.arg("/usr/local/cuda/bin/ncu")
+                .arg("--launch-count")
+                .arg("1")
+                .arg("--launch-skip")
+                .arg("5")
                 .arg("--target-processes")
                 .arg("all")
                 .arg("--kernel-name")

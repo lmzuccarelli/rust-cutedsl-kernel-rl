@@ -67,6 +67,8 @@ pub struct Parameters {
     // Optional `anthropic-beta` header (e.g. for older 1M-context betas).
     #[serde(default)]
     pub llm_beta_header: Option<String>,
+    // used for debugging
+    pub exit_on_fail: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
