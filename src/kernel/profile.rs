@@ -29,10 +29,6 @@ impl ProfileInterface for Profile {
         // restore working dir
         env::set_current_dir(&working_dir)?;
 
-        // stable identifier for this workflow batch kernel (basename without the
-        // .py extension); used to look up the configured kernel name to profile.
-        let work_item_name = work_item.name.clone();
-
         // get the kernel name
         let kernel_file = match work_item.kernel_file {
             Some(name) => name,
@@ -46,29 +42,7 @@ impl ProfileInterface for Profile {
         // for profiling we set the current target directory
         env::set_current_dir(work_item.target_dir)?;
 
-        let kernel = fs::read_to_string(&kernel_file)?;
-        // Prefer the kernel name configured for this workflow batch kernel
-        // (config `kernel_names`), which restricts profiling to the single
-        // kernel being optimized and avoids ncu noise from every other
-        // @cute.kernel in the file. Fall back to extracting all annotated
-        // kernels when no name is configured.
-        let kernel_names = match get_item(&format!("kernel_name:{}", work_item_name)) {
-            Ok(configured) => {
-                log::info!(
-                    "[run] (profileinterface) using configured kernel name {} for {}",
-                    configured,
-                    work_item_name
-                );
-                vec![configured]
-            }
-            Err(_) => {
-                log::debug!(
-                    "[run] (profileinterface) no configured kernel name for {}, extracting all annotated kernels",
-                    work_item_name
-                );
-                extract_kernel_name(kernel)?
-            }
-        };
+        let kernel_names = get_item("kernel_names")?;
         log::debug!(
             "[run] (profileinterface) profile kernel_names {:#?}",
             kernel_names
@@ -81,7 +55,7 @@ impl ProfileInterface for Profile {
         let cutedsl_env_path = get_item("cutedsl_env_path")?;
 
         // use --set detailed rather than --set full
-        for name in kernel_names.iter() {
+        for name in kernel_names.split(",").into_iter() {
             log::info!("[run] profiling kernel {}", name);
             let mut cmd = Command::new("sudo");
             cmd.arg("/usr/local/cuda/bin/ncu")
@@ -199,6 +173,7 @@ impl ProfileInterface for Profile {
     }
 }
 
+#[allow(unused)]
 fn extract_kernel_name(kernel: String) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let mut vec_res = vec![];
     let re = Regex::new("@cute.kernel[\\sdef\\s]+([a-zA-Z0-9_]*)")?;

@@ -1,5 +1,4 @@
 use serde_derive::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::str::FromStr;
@@ -34,7 +33,7 @@ pub struct Parameters {
     // name that should be profiled for it. Without an entry the profiler falls
     // back to profiling every annotated kernel it can find in the file (noisy).
     #[serde(default)]
-    pub kernel_names: HashMap<String, String>,
+    pub kernel_names: Vec<String>,
     pub working_dir: String,
     pub llm_model: String,
     pub llm_agent: LlmAgent,

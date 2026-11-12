@@ -6,9 +6,9 @@
   "workflow_batch": [
     "cutedsl-kernels/cuteDSL_gemm.py"
   ],
-  "kernel_names": {
-    "cutedsl-kernels/cuteDSL_gemm.py": "dense_gemm_kernel"
-  },
+  "kernel_names": [
+    "dense_gemm_kernel"
+  ],
   "working_dir": "/home/lzuccarelli/Projects/rust-cutedsl-kernel-rl",
   "cutedsl_env_path": "/home/lzuccarelli/Projects/cutlass/target_cute_env",
   "llm_agent": "Api",
@@ -29,5 +29,5 @@
   "acceptance_threshold": 0.97,
   "degradation_threshold": -15.0,
   "exclude_trajectories": [],
-  "exit_on_fail": false
+  "exit_on_fail": true
 }

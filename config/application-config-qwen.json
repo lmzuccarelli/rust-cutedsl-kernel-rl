@@ -6,9 +6,9 @@
   "workflow_batch": [
     "cutedsl-kernels/vector_add.py"
   ],
-  "kernel_names": {
-    "cutedsl-kernels/vector_add.py": "vector_add_kernel"
-  },
+  "kernel_names": [
+    "vector_add_kernel"
+  ],
   "working_dir": "/home/lzuccarelli/Projects/rust-cutedsl-kernel-rl",
   "llm_agent": "Api",
   "llm_model": "qwen3-8-27b",

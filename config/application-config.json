@@ -6,9 +6,9 @@
   "workflow_batch": [
     "cutedsl-kernels/square_gemm.py"
   ],
-  "kernel_names": {
-    "cutedsl-kernels/square_gemm.py": "sgemm_kernel"
-  },
+  "kernel_names": [
+    "sgemm_kernel"
+  ],
   "working_dir": "/home/lzuccarelli/Projects/rust-cutedsl-kernel-rl",
   "cutedsl_env_path": "/home/lzuccarelli/Projects/cutlass/target_cute_env",
   "llm_agent": "Api",
