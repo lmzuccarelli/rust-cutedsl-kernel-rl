@@ -6,7 +6,7 @@ use crate::inference::generated_prompts::{
 use crate::kernel::profile::{Profile, ProfileInterface};
 use crate::utils::common::{
     clean_trajectories, extract_code, extract_code_from_call, find_kernel_file,
-    find_most_performant_kernel, get_trajectories, pick_weighted,
+    find_most_performant_kernel, get_trajectories,
 };
 use crate::workflow::api_client::{process_get_call, process_post_call};
 use custom_logger as log;
@@ -741,34 +741,31 @@ impl ControllerInterface for Controller {
                         );
                         let category = Profile::get_category(state.clone())?;
                         log::debug!("[execute_agent_flow] optimization plans {:?}", plans);
-                        let plan = pick_weighted(
-                            plans.clone(),
-                            vec_error_techniques.clone(),
-                            "cuda_graph".to_owned(),
-                        )?;
-                        log::info!("[execute_agent_flow] selected plan {} ", plan.technique);
+                        // TODO: fix the pick_weighted function
+                        // for now just use the top (first element) plan
+                        log::info!("[execute_agent_flow] selected plan {} ", plans[0].technique);
                         log::warn!(
                             "[execute_agent_flow] exclude plans {:?}",
                             vec_error_techniques
                         );
 
                         let task_prompt = get_task_generate_code_prompt(
-                            plan.technique.clone(),
+                            plans[0].technique.clone(),
                             category.to_owned(),
-                            plan.description,
+                            plans[0].description.clone(),
                             ncu_report.to_owned(),
                             code.to_owned(),
                         );
 
                         let wr_res = fs::write(
-                            format!("{}/{}.prompt", next_target_dir, plan.technique),
+                            format!("{}/{}.prompt", next_target_dir, plans[0].technique),
                             task_prompt.clone(),
                         );
                         match wr_res {
                             Ok(_) => {
                                 log::info!(
                                     "[execute_agent_flow] saved {} prompt to disk ",
-                                    plan.technique
+                                    plans[0].technique
                                 );
                             }
                             Err(e) => {
@@ -788,8 +785,10 @@ impl ControllerInterface for Controller {
                         // rate limit
                         thread::sleep(Duration::from_secs(5));
 
-                        let file_name =
-                            format!("{}/{}_llm_response.txt", next_target_dir, plan.technique);
+                        let file_name = format!(
+                            "{}/{}_llm_response.txt",
+                            next_target_dir, plans[0].technique
+                        );
                         let contents_res =
                             process_post_call(Some(file_name), url, task_prompt).await;
                         match contents_res {
@@ -797,14 +796,14 @@ impl ControllerInterface for Controller {
                                 // extract code
                                 let code = extract_code(contents)?;
                                 let wr_res = fs::write(
-                                    format!("{}/{}.py", next_target_dir, plan.technique),
+                                    format!("{}/{}.py", next_target_dir, plans[0].technique),
                                     code,
                                 );
                                 match wr_res {
                                     Ok(_) => {
                                         log::info!(
                                             "[execute_agent_flow] saved {} cutedsl kernel to disk",
-                                            plan.technique
+                                            plans[0].technique
                                         );
                                     }
                                     Err(e) => {

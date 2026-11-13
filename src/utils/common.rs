@@ -119,6 +119,7 @@ pub fn find_most_performant_kernel(base_dir: String) -> Result<(), Box<dyn std::
     Ok(())
 }
 
+#[allow(unused)]
 pub fn pick_weighted(
     mut plans: Vec<OptimizationPlan>,
     exclude: Vec<String>,
