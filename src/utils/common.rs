@@ -127,7 +127,7 @@ pub fn pick_weighted(
     let mut pick = OptimizationPlan {
         technique: current_best_plan,
         relevance_score: 0.9,
-        description: "".to_string(),
+        description: "default".to_string(),
     };
     // first exclude plans that we know don't work
     plans.retain(|x| !exclude.contains(&x.technique));

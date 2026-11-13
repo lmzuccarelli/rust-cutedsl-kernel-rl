@@ -382,7 +382,6 @@ impl ControllerInterface for Controller {
             // show all trajectories
             log::debug!("[execute_agent_flow] trajectories {:#?}", trajectories);
             let mut track_fallback_kernel = format!("{}/{}", baseline_dir, baseline_kernel_file);
-            let track_max_reward = 0.0;
 
             // from previous execution we know these kernel optimization techniques are
             // problematic (compilation, execution and/or profiling)
@@ -599,19 +598,6 @@ impl ControllerInterface for Controller {
                         contents.push_str(&format!("reward                  : {}\n", reward));
                         fs::write(format!("{}/stats.txt", local_target_dir), contents)?;
 
-                        // setup fallback directory and cutedsl kernel if reward is higher than the
-                        // tracking_max_reward
-                        if reward > track_max_reward {
-                            // TODO:
-                            // track_max_reward = reward;
-                            // track_fallback_kernel = format!("{}/{}", local_target_dir, kernel_file);
-                            // log::warn!(
-                            //    "[execute_agent_flow] setting fallback kernel to : {} with path : {}",
-                            //    kernel_file,
-                            //    local_target_dir
-                            // );
-                        }
-
                         if perc < parameters.degradation_threshold {
                             log::warn!("[execute_agent_flow] degradation greater than 10%");
                             if parameters.use_error_vec {
@@ -754,20 +740,13 @@ impl ControllerInterface for Controller {
                             step + 1
                         );
                         let category = Profile::get_category(state.clone())?;
-
-                        // TODO: why?
-                        let current_best_plan = track_fallback_kernel
-                            .split("/")
-                            .last()
-                            .unwrap_or("none")
-                            .to_owned();
-
+                        log::debug!("[execute_agent_flow] optimization plans {:?}", plans);
                         let plan = pick_weighted(
                             plans.clone(),
                             vec_error_techniques.clone(),
-                            current_best_plan,
+                            "cuda_graph".to_owned(),
                         )?;
-                        log::warn!("[execute_agent_flow] selected plan {} ", plan.technique);
+                        log::info!("[execute_agent_flow] selected plan {} ", plan.technique);
                         log::warn!(
                             "[execute_agent_flow] exclude plans {:?}",
                             vec_error_techniques

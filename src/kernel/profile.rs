@@ -63,7 +63,7 @@ impl ProfileInterface for Profile {
                 .arg("--launch-count")
                 .arg("1")
                 .arg("--launch-skip")
-                .arg("5")
+                .arg("0")
                 .arg("--target-processes")
                 .arg("all")
                 .arg("--kernel-name")
