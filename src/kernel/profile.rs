@@ -56,7 +56,8 @@ impl ProfileInterface for Profile {
 
         // use --set detailed rather than --set full
         for name in kernel_names.split(",").into_iter() {
-            log::info!("[run] profiling kernel {}", name);
+            log::info!("[run] profiling kernel name {}", name);
+            log::info!("[run] profiling kernel file {}", kernel_file);
             let mut cmd = Command::new("sudo");
             cmd.arg("/usr/local/cuda/bin/ncu")
                 .arg("--launch-count")

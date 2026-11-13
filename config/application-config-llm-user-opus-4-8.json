@@ -27,7 +27,7 @@
   "create_stats": true,
   "use_error_vec": true,
   "acceptance_threshold": 0.97,
-  "degradation_threshold": -15.0,
+  "degradation_threshold": -5.0,
   "exclude_trajectories": [],
   "exit_on_fail": false
 }
